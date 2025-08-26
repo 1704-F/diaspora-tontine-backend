@@ -62,9 +62,9 @@ module.exports = (sequelize, DataTypes) => {
     
     // 📱 IDENTIFICATION UNIQUE
     phoneNumber: {
-      type: DataTypes.STRING,
+      type: DataTypes.STRING(255),
       allowNull: false,
-      unique: true,
+      field: 'phone_number',
       validate: {
         len: [8, 20],
         isNumeric: false // Permet les +, espaces, tirets
@@ -75,7 +75,6 @@ module.exports = (sequelize, DataTypes) => {
     email: {
       type: DataTypes.STRING,
       allowNull: true,
-      unique: true,
       validate: {
         isEmail: true
       }
@@ -126,67 +125,51 @@ module.exports = (sequelize, DataTypes) => {
     },
     
     postalCode: {
-      type: DataTypes.STRING,
+      type: DataTypes.STRING(20),
       allowNull: true
     },
     
-    // 🔐 AUTHENTIFICATION
+    // 🔐 SECURITE & AUTHENTIFICATION
     password: {
       type: DataTypes.STRING,
-      allowNull: true, // Optionnel si connexion SMS uniquement
+      allowNull: true,
       validate: {
-        len: [6, 255]
-      }
+        len: [8, 128]
+      },
+      comment: 'Hash du mot de passe (optionnel)'
     },
     
     pinCode: {
       type: DataTypes.STRING,
       allowNull: true,
       validate: {
-        len: [4, 6],
-        isNumeric: true
+        len: [4, 8]
       },
-      comment: 'Code PIN pour connexion rapide'
+      comment: 'Hash du code PIN (obligatoire)'
     },
     
-    // 📱 VERIFICATION & STATUT
-    phoneVerified: {
-      type: DataTypes.BOOLEAN,
-      defaultValue: false
-    },
-    
-    phoneVerifiedAt: {
-      type: DataTypes.DATE,
-      allowNull: true
-    },
-    
-    emailVerified: {
-      type: DataTypes.BOOLEAN,
-      defaultValue: false
-    },
-    
-    emailVerifiedAt: {
-      type: DataTypes.DATE,
-      allowNull: true
-    },
-    
+    // 📋 STATUTS & ROLES
     status: {
-      type: DataTypes.ENUM('pending', 'active', 'suspended', 'deactivated'),
-      allowNull: false,
-      defaultValue: 'pending'
+      type: DataTypes.ENUM('pending_verification', 'active', 'suspended', 'banned', 'inactive'),
+      defaultValue: 'pending_verification'
     },
     
-    // 🆔 KYC (Know Your Customer)
+    role: {
+      type: DataTypes.ENUM('member', 'association_admin', 'platform_admin'),
+      defaultValue: 'member'
+    },
+    
+    // 🔍 KYC (Know Your Customer)
     kycStatus: {
-      type: DataTypes.ENUM('none', 'pending', 'approved', 'rejected'),
-      allowNull: false,
-      defaultValue: 'none'
+      type: DataTypes.ENUM('not_started', 'in_progress', 'approved', 'rejected', 'expired'),
+      defaultValue: 'not_started'
     },
     
     kycDocuments: {
       type: DataTypes.JSON,
       allowNull: true,
-      comment: 'URLs des documents KYC (CNI, passeport, etc.)'
+      defaultValue: {},
+      comment: 'Documents KYC: ID, selfie, proof_address'
     },
     
     kycVerifiedAt: {
@@ -194,73 +177,37 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: true
     },
     
-    // 💳 PAIEMENTS
-    preferredCurrency: {
-      type: DataTypes.STRING,
-      allowNull: false,
-      defaultValue: 'EUR',
-      validate: {
-        isIn: [['EUR', 'USD', 'XOF', 'GBP', 'CAD']]
-      }
-    },
-    
-    stripeCustomerId: {
-      type: DataTypes.STRING,
-      allowNull: true,
-      comment: 'ID client Stripe pour l\'Europe'
-    },
-    
-    squareCustomerId: {
-      type: DataTypes.STRING,
-      allowNull: true,
-      comment: 'ID client Square pour les USA'
-    },
-    
-    // ⭐ REPUTATION SYSTEM
+    // 💰 FINANCE & REPUTATION
     associationReputationScore: {
       type: DataTypes.DECIMAL(3, 2),
-      allowNull: true,
-      defaultValue: 0.00,
+      defaultValue: 5.00,
       validate: {
         min: 0.00,
         max: 5.00
-      },
-      comment: 'Note réputation associations (0-5)'
+      }
     },
     
     tontineReputationScore: {
       type: DataTypes.DECIMAL(3, 2),
-      allowNull: true,
-      defaultValue: 0.00,
+      defaultValue: 5.00,
       validate: {
         min: 0.00,
         max: 5.00
-      },
-      comment: 'Note réputation tontines (0-5)'
+      }
     },
     
-    totalAssociationsJoined: {
-      type: DataTypes.INTEGER,
-      defaultValue: 0
+    totalContributed: {
+      type: DataTypes.DECIMAL(10, 2),
+      defaultValue: 0.00,
+      comment: 'Total cotisations payées'
     },
     
-    totalTontinesCompleted: {
-      type: DataTypes.INTEGER,
-      defaultValue: 0
-    },
-    
-    totalTontinesDefaulted: {
-      type: DataTypes.INTEGER,
-      defaultValue: 0
-    },
-    
-    // 🌍 PREFERENCES
-    preferredLanguage: {
-      type: DataTypes.STRING,
-      allowNull: false,
+    // 🌍 LOCALISATION & PREFERENCES
+    language: {
+      type: DataTypes.STRING(5),
       defaultValue: 'fr',
       validate: {
-        isIn: [['fr', 'en', 'it', 'es']]
+        isIn: [['fr', 'en', 'es', 'ar']]
       }
     },
     
@@ -325,7 +272,6 @@ module.exports = (sequelize, DataTypes) => {
     referralCode: {
       type: DataTypes.STRING,
       allowNull: true,
-      unique: true,
       comment: 'Code parrainage unique'
     },
     
@@ -384,11 +330,24 @@ module.exports = (sequelize, DataTypes) => {
     },
     
     indexes: [
-      { fields: ['phone_number'], unique: true },
-      { fields: ['email'], unique: true, where: { email: { [sequelize.Sequelize.Op.ne]: null } } },
+      { 
+        fields: ['phone_number'], 
+        unique: true,
+        name: 'users_phone_number_unique'
+      },
+      { 
+        fields: ['email'], 
+        unique: true, 
+        where: { email: { [sequelize.Sequelize.Op.ne]: null } },
+        name: 'users_email_unique'
+      },
       { fields: ['status'] },
       { fields: ['kyc_status'] },
-      { fields: ['referral_code'], unique: true },
+      { 
+        fields: ['referral_code'], 
+        unique: true,
+        name: 'users_referral_code_unique'
+      },
       { fields: ['created_at'] }
     ]
   });
