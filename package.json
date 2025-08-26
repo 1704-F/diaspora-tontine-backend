@@ -1,0 +1,86 @@
+{
+  "name": "diaspora-tontine-backend",
+  "version": "1.0.0",
+  "description": "API Backend pour l'application Diaspora/Tontine - Gestion associations et épargne collective",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "db:create": "sequelize-cli db:create",
+    "db:drop": "sequelize-cli db:drop",
+    "db:migrate": "sequelize-cli db:migrate",
+    "db:migrate:undo": "sequelize-cli db:migrate:undo",
+    "db:seed": "sequelize-cli db:seed:all",
+    "db:seed:undo": "sequelize-cli db:seed:undo:all",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "lint": "eslint src/",
+    "format": "prettier --write src/"
+  },
+  "keywords": [
+    "diaspora",
+    "tontine",
+    "association",
+    "cotisation",
+    "epargne-collective",
+    "fintech",
+    "communaute",
+    "paiements"
+  ],
+  "author": "Votre Nom",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.19.2",
+    "cors": "^2.8.5",
+    "compression": "^1.8.0",
+    "helmet": "^8.1.0",
+    "morgan": "^1.10.0",
+    "dotenv": "^17.0.1",
+    "pg": "^8.16.3",
+    "sequelize": "^6.37.7",
+    "bcryptjs": "^3.0.2",
+    "jsonwebtoken": "^9.0.2",
+    "express-rate-limit": "^7.5.1",
+    "express-validator": "^7.2.1",
+    "stripe": "^14.0.0",
+    "square": "^36.0.0",
+    "redis": "^4.6.0",
+    "connect-redis": "^7.1.0",
+    "firebase-admin": "^13.4.0",
+    "twilio": "^4.19.0",
+    "puppeteer": "^21.0.0",
+    "pdf-lib": "^1.17.1",
+    "cloudinary": "^2.7.0",
+    "multer": "^2.0.1",
+    "node-cron": "^4.2.1",
+    "swagger-jsdoc": "^6.2.8",
+    "swagger-ui-express": "^5.0.1",
+    "winston": "^3.17.0",
+    "i18n": "^0.15.1",
+    "secure-random": "^1.1.2",
+    "@sentry/node": "^7.0.0"
+  },
+  "devDependencies": {
+    "jest": "^30.0.4",
+    "supertest": "^7.1.1",
+    "nodemon": "^3.1.10",
+    "sequelize-cli": "^6.6.3",
+    "axios": "^1.10.0"
+  },
+  "engines": {
+    "node": ">=16.0.0",
+    "npm": ">=8.0.0"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "collectCoverageFrom": [
+      "src/**/*.js",
+      "!src/server.js",
+      "!src/config/**/*.js"
+    ],
+    "testMatch": [
+      "**/tests/**/*.test.js"
+    ]
+  }
+}
