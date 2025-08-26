@@ -72,15 +72,15 @@ module.exports = (sequelize, DataTypes) => {
     },
     
     slug: {
-      type: DataTypes.STRING,
-      allowNull: false,
-      unique: true,
-      validate: {
-        isLowercase: true,
-        is: /^[a-z0-9-]+$/
-      },
-      comment: 'URL-friendly: "diaspora-malienne-europe"'
-    },
+  type: DataTypes.STRING(255),
+  allowNull: false,
+  field: 'slug', // Mapping explicite
+  validate: {
+    isLowercase: true,
+    is: /^[a-z0-9-]+$/
+  },
+  comment: 'URL-friendly: "diaspora-malienne-europe"'
+},
     
     description: {
       type: DataTypes.TEXT,
@@ -345,13 +345,17 @@ module.exports = (sequelize, DataTypes) => {
     },
     
     indexes: [
-      { fields: ['slug'], unique: true },
-      { fields: ['status'] },
-      { fields: ['domiciliation_country'] },
-      { fields: ['is_multi_section'] },
-      { fields: ['subscription_plan'] },
-      { fields: ['created_at'] }
-    ]
+  { 
+    fields: ['slug'], 
+    unique: true,
+    name: 'associations_slug_unique'
+  },
+  { fields: ['status'] },
+  { fields: ['domiciliation_country'] },
+  { fields: ['is_multi_section'] },
+  { fields: ['subscription_plan'] },
+  { fields: ['created_at'] }
+] 
   });
 
   return Association;

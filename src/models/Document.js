@@ -153,11 +153,12 @@ module.exports = (sequelize, DataTypes) => {
     
     // 🏷️ IDENTIFICATION DOCUMENT
     documentNumber: {
-      type: DataTypes.STRING,
-      allowNull: false,
-      unique: true,
-      comment: 'Numéro unique: DOC20250824001'
-    },
+  type: DataTypes.STRING(255),
+  allowNull: false,
+  field: 'document_number',
+  // unique: true,  // <-- SUPPRIMER CETTE LIGNE
+  comment: 'Numéro unique: DOC20250824001'
+},
     
     type: {
       type: DataTypes.ENUM(
