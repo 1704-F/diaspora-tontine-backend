@@ -2,10 +2,10 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const { body, validationResult } = require('express-validator');
-const { User, AssociationMember, Section, Association } = require('../models');
+const { User, AssociationMember, Section, Association } = require('../../../models');
 const { authService, authenticate } = require('../middleware/auth');
-const { twilioService } = require('../config/twilio');
-const redisConfig = require('../config/redis');
+const { twilioService } = require('../../twilio/twilio');
+const redisConfig = require('../../redis/redis');
 
 const router = express.Router();
 

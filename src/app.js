@@ -62,7 +62,7 @@ app.get('/health', (req, res) => {
 const apiV1 = '/api/v1';
 
 // Routes principales
-app.use(`${apiV1}/auth`, require('./routes/auth'));
+app.use(`${apiV1}/auth`, require('./core/auth/routes/auth'));
 //app.use(`${apiV1}/associations`, require('./routes/associations'));
 // app.use(`${apiV1}/users`, require('./routes/users')); 
 // app.use(`${apiV1}/tontines`, require('./routes/tontines'));

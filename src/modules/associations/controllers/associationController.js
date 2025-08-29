@@ -1,5 +1,5 @@
 //src/controllers/associationController.js
-const { Association, Section, AssociationMember, User, Transaction } = require('../models');
+const { Association, Section, AssociationMember, User, Transaction } = require('../../../models');
 const { body, validationResult } = require('express-validator');
 
 // Validation rules

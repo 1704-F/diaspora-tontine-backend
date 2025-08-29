@@ -1,8 +1,8 @@
 // middleware/auth.js
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
-const { User, AssociationMember, TontineParticipant } = require('../models');
-const redisConfig = require('../config/redis');
+const { User, AssociationMember, TontineParticipant } = require('../../../models');
+const redisConfig = require('../../redis/redis');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-diaspora-tontine';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '24h';
@@ -350,7 +350,7 @@ const requireTontinePermission = (tontineParam = 'tontineId', requiredRole = 'pa
             tontineId: tontineId
           }
         }),
-        require('../models').Tontine.findByPk(tontineId)
+        require('../../../models').Tontine.findByPk(tontineId)
       ]);
 
       const isOrganizer = tontine?.organizerId === req.user.id;
