@@ -61,12 +61,12 @@ app.get('/health', (req, res) => {
 // 🛣️ Routes API
 const apiV1 = '/api/v1';
 
-// Routes principales (à implémenter progressivement)
-// app.use(`${apiV1}/auth`, require('./routes/auth'));
+// Routes principales
+app.use(`${apiV1}/auth`, require('./routes/auth'));
+//app.use(`${apiV1}/associations`, require('./routes/associations'));
 // app.use(`${apiV1}/users`, require('./routes/users')); 
-// app.use(`${apiV1}/associations`, require('./routes/associations'));
 // app.use(`${apiV1}/tontines`, require('./routes/tontines'));
-// app.use(`${apiV1}/payments`, require('./routes/payments'));
+// app.use(`${apiV1}/payments`, require('./routes/payments'));1}/payments`, require('./routes/payments'));
 
 // 🧪 Route de test pour vérifier les models
 app.get(`${apiV1}/test/models`, async (req, res) => {

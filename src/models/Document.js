@@ -161,51 +161,20 @@ module.exports = (sequelize, DataTypes) => {
 },
     
     type: {
-      type: DataTypes.ENUM(
-        // DOCUMENTS LEGAUX ASSOCIATION
-        'association_statuts',           // Statuts association
-        'association_receipisse',        // Récépissé déclaration
-        'association_rib',               // RIB association
-        'association_pv_creation',       // PV création
-        'association_pv_assembly',       // PV assemblée générale
-        'association_delegation',        // Délégation pouvoir section
-        'association_insurance',         // Assurance association
-        
-        // KYC UTILISATEURS
-        'kyc_identity',                  // CNI, Passeport
-        'kyc_residence_permit',          // Titre séjour
-        'kyc_address_proof',             // Justificatif domicile
-        'kyc_income_proof',              // Bulletin salaire, contrat
-        'kyc_bank_statement',            // RIB personnel
-        
-        // ATTESTATIONS GENEREES
-        'attestation_membership',        // Attestation membre association
-        'attestation_cotisations',       // Attestation cotisations à jour
-        'attestation_debt',              // Attestation dette (défaillance)
-        'attestation_completion',        // Attestation fin participation
-        
-        // RAPPORTS & EXPORTS
-        'report_financial',              // Rapport financier
-        'report_members',                // Liste membres
-        'report_activities',             // Rapport d'activité
-        'export_transactions',           // Export transactions
-        'export_statistics',             // Export statistiques
-        
-        // TONTINES
-        'tontine_rules',                 // Règlement tontine
-        'tontine_participant_list',      // Liste participants
-        'tontine_draw_proof',            // Preuve tirage au sort
-        'tontine_completion_report',     // Rapport fin tontine
-        
-        // AUTRES
-        'contract',                      // Contrat
-        'invoice',                       // Facture
-        'receipt',                       // Reçu
-        'legal_notice',                  // Mise en demeure
-        'other'                          // Autre
-      ),
-      allowNull: false
-    },
+  type: DataTypes.STRING,
+  allowNull: false,
+  validate: {
+    isIn: [[
+      'association_statuts', 'association_receipisse', 'association_rib', 'association_pv_creation',
+      'association_pv_assembly', 'association_delegation', 'association_insurance',
+      'kyc_identity', 'kyc_residence_permit', 'kyc_address_proof', 'kyc_income_proof', 'kyc_bank_statement',
+      'attestation_membership', 'attestation_cotisations', 'attestation_debt', 'attestation_completion',
+      'report_financial', 'report_members', 'report_activities', 'export_transactions', 'export_statistics',
+      'tontine_rules', 'tontine_participant_list', 'tontine_draw_proof', 'tontine_completion_report',
+      'contract', 'invoice', 'receipt', 'legal_notice', 'other'
+    ]]
+  }
+},
     
     subType: {
       type: DataTypes.STRING,
@@ -261,16 +230,14 @@ module.exports = (sequelize, DataTypes) => {
     
     // 🔐 SÉCURITÉ & ACCÈS
     accessLevel: {
-      type: DataTypes.ENUM(
-        'public',           // Accessible à tous les membres
-        'association_only', // Membres association seulement
-        'board_only',       // Bureau seulement
-        'owner_only',       // Propriétaire seulement
-        'platform_admin'    // Admin plateforme seulement
-      ),
-      allowNull: false,
-      defaultValue: 'owner_only'
-    },
+  type: DataTypes.STRING,
+  allowNull: false,
+  defaultValue: 'owner_only',
+  validate: {
+    isIn: [['public', 'association_only', 'board_only', 'owner_only', 'platform_admin']]
+  }
+},
+
     
     isEncrypted: {
       type: DataTypes.BOOLEAN,
@@ -284,19 +251,15 @@ module.exports = (sequelize, DataTypes) => {
     },
     
     // 📊 STATUT & VALIDATION
-    status: {
-      type: DataTypes.ENUM(
-        'uploaded',         // Uploadé, en attente
-        'processing',       // En cours traitement
-        'validated',        // Validé par autorité compétente
-        'rejected',         // Rejeté
-        'expired',          // Expiré
-        'archived',         // Archivé
-        'deleted'           // Supprimé (soft delete)
-      ),
-      allowNull: false,
-      defaultValue: 'uploaded'
-    },
+   status: {
+  type: DataTypes.STRING,
+  allowNull: false,
+  defaultValue: 'uploaded',
+  validate: {
+    isIn: [['uploaded', 'processing', 'validated', 'rejected', 'expired', 'archived', 'deleted']]
+  }
+},
+
     
     validatedAt: {
       type: DataTypes.DATE,
@@ -422,25 +385,31 @@ module.exports = (sequelize, DataTypes) => {
     },
     
     // 📋 COMPLIANCE & LEGAL
-    legalValue: {
-      type: DataTypes.ENUM('none', 'informative', 'probative', 'authentic'),
-      allowNull: false,
-      defaultValue: 'informative',
-      comment: 'Valeur légale du document'
-    },
-    
+ legalValue: {
+  type: DataTypes.STRING,
+  allowNull: false,
+  defaultValue: 'informative',
+  validate: {
+    isIn: [['none', 'informative', 'probative', 'authentic']]
+  },
+  comment: 'Valeur légale du document'
+},
     retentionPolicy: {
       type: DataTypes.JSON,
       allowNull: true,
       comment: 'Politique conservation: durée, suppression auto'
     },
     
-    gdprCategory: {
-      type: DataTypes.ENUM('personal', 'sensitive', 'anonymous', 'public'),
-      allowNull: false,
-      defaultValue: 'personal',
-      comment: 'Catégorie RGPD'
-    },
+ gdprCategory: {
+  type: DataTypes.STRING,
+  allowNull: false,
+  defaultValue: 'personal',
+  validate: {
+    isIn: [['personal', 'sensitive', 'anonymous', 'public']]
+  },
+  comment: 'Catégorie RGPD'
+},
+
     
     // 🔄 HISTORIQUE & VERSIONS
     parentDocumentId: {
@@ -480,10 +449,14 @@ module.exports = (sequelize, DataTypes) => {
     
     // ⚙️ TECHNICAL METADATA
     uploadedFrom: {
-      type: DataTypes.ENUM('web', 'mobile', 'api', 'import', 'system'),
-      allowNull: false,
-      defaultValue: 'web'
-    },
+  type: DataTypes.STRING,
+  allowNull: false,
+  defaultValue: 'web',
+  validate: {
+    isIn: [['web', 'mobile', 'api', 'import', 'system']]
+  }
+},
+
     
     processingLogs: {
       type: DataTypes.JSON,
@@ -499,11 +472,14 @@ module.exports = (sequelize, DataTypes) => {
     
     // 📊 BUSINESS METRICS
     businessValue: {
-      type: DataTypes.ENUM('low', 'medium', 'high', 'critical'),
-      allowNull: false,
-      defaultValue: 'medium',
-      comment: 'Importance business du document'
-    },
+  type: DataTypes.STRING,
+  allowNull: false,
+  defaultValue: 'medium',
+  validate: {
+    isIn: [['low', 'medium', 'high', 'critical']]
+  },
+  comment: 'Importance business du document'
+},
     
     generationCost: {
       type: DataTypes.DECIMAL(6, 2),

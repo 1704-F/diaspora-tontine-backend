@@ -148,11 +148,11 @@ module.exports = (sequelize, DataTypes) => {
     
     // 🏷️ IDENTIFICATION TRANSACTION
     transactionNumber: {
-      type: DataTypes.STRING,
-      allowNull: false,
-      unique: true,
-      comment: 'Numéro unique transaction: TRX20250824001'
-    },
+  type: DataTypes.STRING,
+  allowNull: false,
+  // unique: true,  ← COMMENTÉ TEMPORAIREMENT
+  comment: 'Numéro unique transaction: TRX20250824001'
+},
     
     type: {
       type: DataTypes.ENUM(

@@ -143,7 +143,7 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.STRING,
       allowNull: true,
       validate: {
-        len: [4, 8]
+        
       },
       comment: 'Hash du code PIN (obligatoire)'
     },

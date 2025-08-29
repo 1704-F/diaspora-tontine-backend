@@ -54,7 +54,7 @@ async function startServer() {
       }
 
       // 3. Puis synchroniser tous les autres (relations)
-      await sequelize.sync({ alter: true });
+      await sequelize.sync({ alter: true }); 
       console.log('✅ Tous les modèles synchronisés');
     }
     
