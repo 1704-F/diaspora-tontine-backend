@@ -157,16 +157,19 @@ module.exports = (sequelize, DataTypes) => {
     
     // 🏷️ IDENTIFICATION TRANSACTION
     type: {
-      type: DataTypes.ENUM(
-        'cotisation',           // Cotisation association
-        'cotisation_tontine',   // Cotisation tontine
-        'aide',                 // Aide association
-        'versement_tontine',    // Versement tontine (bénéficiaire)
-        'remboursement',        // Remboursement défaillance
-        'commission',           // Commission DiasporaTontine
-        'refund'               // Remboursement client
-      ),
+      type: DataTypes.STRING(50),
       allowNull: false,
+      validate: {
+        isIn: [[
+          'cotisation',           // Cotisation association
+          'cotisation_tontine',   // Cotisation tontine
+          'aide',                 // Aide association
+          'versement_tontine',    // Versement tontine (bénéficiaire)
+          'remboursement',        // Remboursement défaillance
+          'commission',           // Commission DiasporaTontine
+          'refund'               // Remboursement client
+        ]]
+      },
       comment: 'Type de transaction'
     },
     
@@ -229,8 +232,11 @@ module.exports = (sequelize, DataTypes) => {
     
     // 💳 PAIEMENT
     paymentMethod: {
-      type: DataTypes.ENUM('card', 'iban', 'mobile_money', 'cash', 'internal'),
+      type: DataTypes.STRING(20),
       allowNull: false,
+      validate: {
+        isIn: [['card', 'iban', 'mobile_money', 'cash', 'internal']]
+      },
       comment: 'Méthode de paiement utilisée'
     },
     
@@ -254,17 +260,12 @@ module.exports = (sequelize, DataTypes) => {
     
     // 🔄 STATUT & SUIVI
     status: {
-      type: DataTypes.ENUM(
-        'pending',      // En attente
-        'processing',   // En cours traitement
-        'completed',    // Terminée avec succès
-        'failed',       // Échec
-        'cancelled',    // Annulée
-        'refunded',     // Remboursée
-        'late'          // En retard (cotisations)
-      ),
+      type: DataTypes.STRING(20),
       allowNull: false,
       defaultValue: 'pending',
+      validate: {
+        isIn: [['pending', 'processing', 'completed', 'failed', 'cancelled', 'refunded', 'late']]
+      },
       comment: 'Statut de la transaction'
     },
     
@@ -340,9 +341,12 @@ module.exports = (sequelize, DataTypes) => {
     
     // 🔍 AUDIT TRAIL
     source: {
-      type: DataTypes.ENUM('imported', 'app', 'manual'),
+      type: DataTypes.STRING(20),
       allowNull: false,
       defaultValue: 'app',
+      validate: {
+        isIn: [['imported', 'app', 'manual']]
+      },
       comment: 'Source de la transaction (import historique, app, saisie manuelle)'
     },
     

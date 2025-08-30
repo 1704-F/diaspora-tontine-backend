@@ -166,9 +166,12 @@ module.exports = (sequelize, DataTypes) => {
     },
     
     status: {
-      type: DataTypes.ENUM('pending', 'active', 'suspended', 'excluded', 'inactive'),
+      type: DataTypes.STRING(20),
       allowNull: false,
       defaultValue: 'pending',
+      validate: {
+        isIn: [['pending', 'active', 'suspended', 'excluded', 'inactive']]
+      },
       comment: 'Statut actuel du membre'
     },
     
@@ -265,9 +268,12 @@ module.exports = (sequelize, DataTypes) => {
     },
     
     contributionStatus: {
-      type: DataTypes.ENUM('uptodate', 'late', 'very_late'),
+      type: DataTypes.STRING(20),
       allowNull: false,
       defaultValue: 'uptodate',
+      validate: {
+        isIn: [['uptodate', 'late', 'very_late']]
+      },
       comment: 'Statut cotisations'
     },
     

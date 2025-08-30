@@ -60,9 +60,37 @@ class AssociationController {
         tresorier: { userId: null, name: null }
       };
 
+      // Générer slug unique à partir du nom
+      const generateSlug = (name) => {
+        return name
+          .toLowerCase()
+          .replace(/[àáäâ]/g, 'a')
+          .replace(/[èéëê]/g, 'e')
+          .replace(/[ìíïî]/g, 'i')
+          .replace(/[òóöô]/g, 'o')
+          .replace(/[ùúüû]/g, 'u')
+          .replace(/[ç]/g, 'c')
+          .replace(/[^a-z0-9 -]/g, '')
+          .replace(/\s+/g, '-')
+          .replace(/-+/g, '-')
+          .trim('-');
+      };
+
+      let slug = generateSlug(name);
+      
+      // Vérifier unicité du slug
+      let slugExists = await Association.findOne({ where: { slug } });
+      let counter = 1;
+      while (slugExists) {
+        slug = `${generateSlug(name)}-${counter}`;
+        slugExists = await Association.findOne({ where: { slug } });
+        counter++;
+      }
+
       // Créer l'association
       const association = await Association.create({
         name,
+        slug,
         description,
         legalStatus,
         country,
@@ -73,7 +101,7 @@ class AssociationController {
         permissionsMatrix: permissionsMatrix || {},
         settings: settings || {},
         founderId: req.user.id,
-        status: 'pending' // En attente validation KYB
+        status: 'pending_validation' // En attente validation KYB
       });
 
       // Ajouter le créateur comme membre fondateur
@@ -93,7 +121,7 @@ class AssociationController {
         include: [
           {
             model: AssociationMember,
-            as: 'members',
+            as: 'memberships',
             include: [{ model: User, as: 'user', attributes: ['id', 'fullName', 'phoneNumber'] }]
           },
           {
@@ -268,7 +296,7 @@ class AssociationController {
           { model: Section, as: 'sections' },
           { 
             model: AssociationMember, 
-            as: 'members',
+            as: 'memberships',
             include: [{ model: User, as: 'user', attributes: ['id', 'fullName'] }]
           }
         ]

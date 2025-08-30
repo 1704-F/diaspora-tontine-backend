@@ -75,8 +75,17 @@ async function startServer() {
         
         // 3. Tables relations (avec FK vers principales)
         if (models.Section) {
-          await models.Section.sync({ alter: true });
-          console.log('   ✅ Section synchronisé');
+          // Éviter alter: true pour les ENUM (bug Sequelize connu)
+          const sectionExists = await sequelize.getQueryInterface().showAllTables()
+            .then(tables => tables.includes('sections'));
+          
+          if (sectionExists) {
+            await models.Section.sync({ force: false }); // Pas d'alter pour éviter bug ENUM
+            console.log('   ✅ Section synchronisé (sans alter - table existante)');
+          } else {
+            await models.Section.sync({ alter: true });
+            console.log('   ✅ Section synchronisé (création initiale)');
+          }
         }
         
         if (models.AssociationMember) {

@@ -129,7 +129,7 @@ const validateCreateAssociation = [
     .withMessage('Nom association: 3-255 caractères'),
     
   body('legalStatus')
-    .isIn(['association', 'cooperative', 'foundation', 'other'])
+    .isIn(['association_1901', 'asbl', 'nonprofit_501c3', 'other'])
     .withMessage('Statut légal invalide'),
     
   body('country')

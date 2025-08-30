@@ -151,13 +151,11 @@ module.exports = (sequelize, DataTypes) => {
     
     // 🎯 TYPE DE NOTATION
     ratingType: {
-      type: DataTypes.ENUM(
-        'participant_to_organizer',    // Participant note organisateur
-        'organizer_to_participant',    // Organisateur note participant
-        'participant_to_participant',  // Participant note autre participant (rare)
-        'mutual'                       // Notation mutuelle
-      ),
+      type: DataTypes.STRING(30),
       allowNull: false,
+      validate: {
+        isIn: [['participant_to_organizer', 'organizer_to_participant', 'participant_to_participant', 'mutual']]
+      },
       comment: 'Type de relation dans la notation'
     },
     
@@ -290,9 +288,12 @@ module.exports = (sequelize, DataTypes) => {
     
     // 🔒 STATUT & CONTRÔLE
     status: {
-      type: DataTypes.ENUM('draft', 'published', 'disputed', 'moderated', 'archived'),
+      type: DataTypes.STRING(20),
       allowNull: false,
       defaultValue: 'draft',
+      validate: {
+        isIn: [['draft', 'published', 'disputed', 'moderated', 'archived']]
+      },
       comment: 'Statut de la notation'
     },
     
@@ -389,9 +390,12 @@ module.exports = (sequelize, DataTypes) => {
     
     // 🔍 MÉTADONNÉES
     source: {
-      type: DataTypes.ENUM('manual', 'automatic', 'imported'),
+      type: DataTypes.STRING(20),
       allowNull: false,
       defaultValue: 'manual',
+      validate: {
+        isIn: [['manual', 'automatic', 'imported']]
+      },
       comment: 'Source de la notation'
     },
     

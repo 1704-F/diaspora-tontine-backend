@@ -149,19 +149,12 @@ module.exports = (sequelize, DataTypes) => {
     },
     
     type: {
-      type: DataTypes.ENUM(
-        'meeting',           // Réunion
-        'general_assembly',  // Assemblée générale
-        'cultural',          // Événement culturel
-        'social',           // Événement social
-        'fundraising',      // Collecte fonds
-        'conference',       // Conférence
-        'workshop',         // Atelier
-        'celebration',      // Célébration
-        'other'            // Autre
-      ),
+      type: DataTypes.STRING(30),
       allowNull: false,
       defaultValue: 'meeting',
+      validate: {
+        isIn: [['meeting', 'general_assembly', 'cultural', 'social', 'fundraising', 'conference', 'workshop', 'celebration', 'other']]
+      },
       comment: 'Type d\'événement'
     },
     
@@ -226,9 +219,12 @@ module.exports = (sequelize, DataTypes) => {
     
     // 🎯 PARTICIPANTS & ACCÈS
     visibility: {
-      type: DataTypes.ENUM('public', 'association', 'section', 'bureau', 'invited_only'),
+      type: DataTypes.STRING(20),
       allowNull: false,
       defaultValue: 'association',
+      validate: {
+        isIn: [['public', 'association', 'section', 'bureau', 'invited_only']]
+      },
       comment: 'Niveau visibilité événement'
     },
     
@@ -327,9 +323,12 @@ module.exports = (sequelize, DataTypes) => {
     
     // 🎯 STATUT ÉVÉNEMENT
     status: {
-      type: DataTypes.ENUM('draft', 'published', 'cancelled', 'postponed', 'completed'),
+      type: DataTypes.STRING(20),
       allowNull: false,
       defaultValue: 'draft',
+      validate: {
+        isIn: [['draft', 'published', 'cancelled', 'postponed', 'completed']]
+      },
       comment: 'Statut événement'
     },
     

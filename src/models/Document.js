@@ -122,38 +122,41 @@ module.exports = (sequelize, DataTypes) => {
     
     // 🏷️ CLASSIFICATION DOCUMENT
     type: {
-      type: DataTypes.ENUM(
-        // 📄 KYC/KYB
-        'identity_card',          // Carte identité
-        'passport',              // Passeport
-        'driver_license',        // Permis conduire
-        'residence_permit',      // Titre séjour
-        'proof_address',         // Justificatif domicile
-        'iban_proof',           // RIB
-        
-        // 🏛️ Association
-        'association_statuts',   // Statuts association
-        'association_receipt',   // Récépissé déclaration
-        'meeting_minutes',       // PV réunions
-        'financial_report',      // Rapport financier
-        
-        // 💰 Tontine
-        'tontine_rules',        // Règlement tontine
-        'debt_attestation',     // Attestation dette
-        'completion_certificate', // Attestation fin tontine
-        'default_notice',       // Avis défaillance
-        
-        // 📊 Attestations générées
-        'contribution_certificate', // Attestation cotisations
-        'membership_certificate',   // Attestation adhésion
-        'payment_receipt',          // Reçu paiement
-        
-        // 📁 Autres
-        'contract',             // Contrat
-        'invoice',              // Facture
-        'other'                 // Autre
-      ),
+      type: DataTypes.STRING(50),
       allowNull: false,
+      validate: {
+        isIn: [[
+          // 📄 KYC/KYB
+          'identity_card',          // Carte identité
+          'passport',              // Passeport
+          'driver_license',        // Permis conduire
+          'residence_permit',      // Titre séjour
+          'proof_address',         // Justificatif domicile
+          'iban_proof',           // RIB
+          
+          // 🏛️ Association
+          'association_statuts',   // Statuts association
+          'association_receipt',   // Récépissé déclaration
+          'meeting_minutes',       // PV réunions
+          'financial_report',      // Rapport financier
+          
+          // 💰 Tontine
+          'tontine_rules',        // Règlement tontine
+          'debt_attestation',     // Attestation dette
+          'completion_certificate', // Attestation fin tontine
+          'default_notice',       // Avis défaillance
+          
+          // 📊 Attestations générées
+          'contribution_certificate', // Attestation cotisations
+          'membership_certificate',   // Attestation adhésion
+          'payment_receipt',          // Reçu paiement
+          
+          // 📁 Autres
+          'contract',             // Contrat
+          'invoice',              // Facture
+          'other'                 // Autre
+        ]]
+      },
       comment: 'Type de document'
     },
     
@@ -215,9 +218,12 @@ module.exports = (sequelize, DataTypes) => {
     
     // 🔐 SÉCURITÉ & VALIDATION
     status: {
-      type: DataTypes.ENUM('pending', 'validated', 'rejected', 'expired', 'processing'),
+      type: DataTypes.STRING(20),
       allowNull: false,
       defaultValue: 'pending',
+      validate: {
+        isIn: [['pending', 'validated', 'rejected', 'expired', 'processing']]
+      },
       comment: 'Statut de validation'
     },
     
@@ -297,9 +303,12 @@ module.exports = (sequelize, DataTypes) => {
     
     // 👁️ ACCÈS & VISIBILITÉ
     visibility: {
-      type: DataTypes.ENUM('private', 'association', 'tontine', 'bureau', 'public'),
+      type: DataTypes.STRING(20),
       allowNull: false,
       defaultValue: 'private',
+      validate: {
+        isIn: [['private', 'association', 'tontine', 'bureau', 'public']]
+      },
       comment: 'Niveau visibilité document'
     },
     
