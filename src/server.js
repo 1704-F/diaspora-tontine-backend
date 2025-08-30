@@ -1,8 +1,8 @@
 // src/server.js
 require('dotenv').config();
 const app = require('./app');
-const sequelize = require('./config/database');
-const redisClient = require('./config/redis');
+const sequelize = require('./core/database/database');
+const redisClient = require('./core/redis/redis');
 const fs = require('fs');
 const path = require('path');
 
@@ -22,7 +22,7 @@ async function startServer() {
     console.log('✅ Connexion PostgreSQL établie avec succès');
     
     // 🔍 Test connexion Redis (optionnel)
-    const redisConfig = require('./config/redis');
+    const redisConfig = require('./core/redis/redis');
     if (redisConfig.isAvailable()) {
       console.log('✅ Connexion Redis établie avec succès');
     } else {
