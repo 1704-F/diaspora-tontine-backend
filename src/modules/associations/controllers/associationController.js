@@ -1,542 +1,695 @@
-//src/controllers/associationController.js
-const { Association, Section, AssociationMember, User, Transaction } = require('../../../models');
-const { body, validationResult } = require('express-validator');
+const { Association, AssociationMember, Section, User, Transaction } = require('../../../models');
+const { Op } = require('sequelize');
 
-// Validation rules
-const createAssociationValidation = [
-  body('name')
-    .isLength({ min: 3, max: 100 })
-    .withMessage('Nom association requis (3-100 caractères)'),
-  body('domiciliationCountry')
-    .isLength({ min: 2, max: 2 })
-    .withMessage('Code pays requis (2 lettres)'),
-  body('legalStatus')
-    .isIn(['association_1901', 'asbl', 'nonprofit_501c3', 'other'])
-    .withMessage('Statut légal invalide'),
-  body('primaryCurrency')
-    .isIn(['EUR', 'USD', 'XOF', 'GBP', 'CAD'])
-    .withMessage('Devise invalide')
-];
+class AssociationController {
+  
+  // 🏛️ CRÉER ASSOCIATION (avec KYB)
+  async createAssociation(req, res) {
+    try {
+      const {
+        name,
+        description,
+        legalStatus,
+        country,
+        city,
+        registrationNumber,
+        memberTypes,
+        bureauCentral,
+        permissionsMatrix,
+        settings
+      } = req.body;
 
-// @desc    Créer une nouvelle association
-// @route   POST /api/v1/associations
-// @access  Private
-const createAssociation = async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        success: false,
-        message: 'Données invalides',
-        errors: errors.array()
-      });
-    }
-
-    const {
-      name,
-      description,
-      legalStatus,
-      domiciliationCountry,
-      domiciliationCity,
-      headquartersAddress,
-      primaryCurrency,
-      centralBoard,
-      memberTypes,
-      accessRights,
-      contactInfo,
-      isMultiSection
-    } = req.body;
-
-    // Créer l'association
-    const association = await Association.create({
-      name,
-      description,
-      legalStatus: legalStatus || 'association_1901',
-      domiciliationCountry: domiciliationCountry || 'FR',
-      domiciliationCity,
-      headquartersAddress,
-      primaryCurrency: primaryCurrency || 'EUR',
-      centralBoard: centralBoard || {},
-      memberTypes: memberTypes || {}, // Utilisera les valeurs par défaut
-      accessRights: accessRights || {}, // Utilisera les valeurs par défaut
-      contactInfo,
-      isMultiSection: isMultiSection || false,
-      status: 'pending_validation'
-    });
-
-    // Créer automatiquement le premier membre (créateur = président)
-    await AssociationMember.create({
-      userId: req.userId,
-      associationId: association.id,
-      memberType: 'cdi', // Par défaut
-      status: 'active',
-      role: 'president',
-      joinDate: new Date(),
-      validatedAt: new Date(),
-      validatedBy: req.userId,
-      permissions: {
-        canVote: true,
-        canViewFinances: true,
-        canManageMembers: true,
-        canOrganizeEvents: true,
-        canApproveAids: true
-      }
-    });
-
-    // Inclure les relations dans la réponse
-    const associationWithDetails = await Association.findByPk(association.id, {
-      include: [
-        {
-          model: AssociationMember,
-          as: 'memberships',
-          include: [{ model: User, as: 'user' }]
+      // Vérifier que l'utilisateur n'a pas déjà trop d'associations
+      const userAssociations = await AssociationMember.count({
+        where: { 
+          userId: req.user.id,
+          status: 'active'
         }
-      ]
-    });
-
-    res.status(201).json({
-      success: true,
-      message: 'Association créée avec succès',
-      data: {
-        association: associationWithDetails
-      }
-    });
-
-  } catch (error) {
-    console.error('Erreur création association:', error);
-    
-    if (error.name === 'SequelizeUniqueConstraintError') {
-      return res.status(400).json({
-        success: false,
-        message: 'Une association avec ce nom existe déjà'
       });
-    }
 
-    res.status(500).json({
-      success: false,
-      message: 'Erreur lors de la création de l\'association'
-    });
-  }
-};
+      const maxAssociations = req.user.role === 'super_admin' ? 100 : 5;
+      if (userAssociations >= maxAssociations) {
+        return res.status(400).json({
+          error: 'Limite d\'associations atteinte',
+          code: 'MAX_ASSOCIATIONS_REACHED',
+          current: userAssociations,
+          max: maxAssociations
+        });
+      }
 
-// @desc    Récupérer toutes les associations (public)
-// @route   GET /api/v1/associations
-// @access  Public
-const getAssociations = async (req, res) => {
-  try {
-    const { 
-      page = 1, 
-      limit = 10, 
-      country, 
-      status = 'active',
-      search 
-    } = req.query;
+      // Configuration par défaut des types membres si non fournie
+      const defaultMemberTypes = memberTypes || [
+        {
+          name: 'membre_simple',
+          cotisationAmount: 10.00,
+          permissions: ['view_profile', 'participate_events'],
+          description: 'Membre standard'
+        },
+        {
+          name: 'membre_actif', 
+          cotisationAmount: 15.00,
+          permissions: ['view_profile', 'participate_events', 'vote'],
+          description: 'Membre avec droit de vote'
+        }
+      ];
 
-    const offset = (page - 1) * limit;
-    
-    // Construire les conditions de recherche
-    const whereConditions = { status };
-    
-    if (country) {
-      whereConditions.domiciliationCountry = country;
-    }
-    
-    if (search) {
-      whereConditions.name = {
-        [require('sequelize').Op.iLike]: `%${search}%`
+      // Configuration bureau par défaut
+      const defaultBureau = bureauCentral || {
+        president: { userId: req.user.id, name: req.user.fullName },
+        secretaire: { userId: null, name: null },
+        tresorier: { userId: null, name: null }
       };
-    }
 
-    const { count, rows: associations } = await Association.findAndCountAll({
-      where: whereConditions,
-      include: [
+      // Créer l'association
+      const association = await Association.create({
+        name,
+        description,
+        legalStatus,
+        country,
+        city,
+        registrationNumber,
+        memberTypes: defaultMemberTypes,
+        bureauCentral: defaultBureau,
+        permissionsMatrix: permissionsMatrix || {},
+        settings: settings || {},
+        founderId: req.user.id,
+        status: 'pending' // En attente validation KYB
+      });
+
+      // Ajouter le créateur comme membre fondateur
+      await AssociationMember.create({
+        userId: req.user.id,
+        associationId: association.id,
+        memberType: 'fondateur',
+        status: 'active',
+        roles: ['president'],
+        joinDate: new Date(),
+        approvedDate: new Date(),
+        approvedBy: req.user.id
+      });
+
+      // Charger association complète pour retour
+      const associationComplete = await Association.findByPk(association.id, {
+        include: [
+          {
+            model: AssociationMember,
+            as: 'members',
+            include: [{ model: User, as: 'user', attributes: ['id', 'fullName', 'phoneNumber'] }]
+          },
+          {
+            model: Section,
+            as: 'sections'
+          }
+        ]
+      });
+
+      res.status(201).json({
+        success: true,
+        message: 'Association créée avec succès',
+        data: {
+          association: associationComplete,
+          nextSteps: [
+            'Télécharger documents KYB',
+            'Compléter bureau association',
+            'Configurer types membres',
+            'Inviter premiers membres'
+          ]
+        }
+      });
+
+    } catch (error) {
+      console.error('Erreur création association:', error);
+      res.status(500).json({
+        error: 'Erreur création association',
+        code: 'ASSOCIATION_CREATION_ERROR',
+        details: error.message
+      });
+    }
+  }
+
+  // 📋 OBTENIR DÉTAILS ASSOCIATION
+  async getAssociation(req, res) {
+    try {
+      const { id } = req.params;
+      const { includeMembers = false, includeFinances = false } = req.query;
+
+      // Vérifier accès à l'association
+      const membership = await AssociationMember.findOne({
+        where: {
+          userId: req.user.id,
+          associationId: id,
+          status: 'active'
+        }
+      });
+
+      if (!membership && req.user.role !== 'super_admin') {
+        return res.status(403).json({
+          error: 'Accès association non autorisé',
+          code: 'ASSOCIATION_ACCESS_DENIED'
+        });
+      }
+
+      // Construire includes selon permissions
+      const includes = [
         {
           model: Section,
           as: 'sections',
-          attributes: ['id', 'name', 'country', 'currency']
+          attributes: ['id', 'name', 'country', 'city', 'membersCount']
         }
-      ],
-      attributes: [
-        'id', 'name', 'description', 'domiciliationCountry', 'domiciliationCity',
-        'primaryCurrency', 'isMultiSection', 'totalMembers', 'activeMembers',
-        'created_at'
-      ],
-      limit: parseInt(limit),
-      offset,
-      order: [['created_at', 'DESC']]
-    });
+      ];
 
-    res.status(200).json({
-      success: true,
-      data: {
-        associations,
-        pagination: {
-          current: parseInt(page),
-          pages: Math.ceil(count / limit),
-          total: count,
-          limit: parseInt(limit)
+      // Inclure membres si autorisé
+      if (includeMembers === 'true') {
+        const canViewMembers = this.checkPermission(membership, 'view_member_list');
+        if (canViewMembers || req.user.role === 'super_admin') {
+          includes.push({
+            model: AssociationMember,
+            as: 'members',
+            include: [{ 
+              model: User, 
+              as: 'user', 
+              attributes: ['id', 'fullName', 'phoneNumber', 'profilePicture'] 
+            }]
+          });
         }
       }
-    });
 
-  } catch (error) {
-    console.error('Erreur récupération associations:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Erreur lors de la récupération des associations'
-    });
-  }
-};
+      const association = await Association.findByPk(id, { include: includes });
 
-// @desc    Récupérer une association par ID
-// @route   GET /api/v1/associations/:id
-// @access  Public
-const getAssociation = async (req, res) => {
-  try {
-    const { id } = req.params;
-    
-    const association = await Association.findByPk(id, {
-      include: [
-        {
-          model: Section,
-          as: 'sections',
-          include: [
-            {
-              model: AssociationMember,
-              as: 'members',
-              attributes: ['id', 'memberType', 'status', 'role'],
-              where: { status: 'active' },
-              required: false
-            }
-          ]
-        },
-        {
-          model: AssociationMember,
-          as: 'memberships',
-          where: { status: 'active' },
-          required: false,
-          include: [
-            {
-              model: User,
-              as: 'user',
-              attributes: ['id', 'firstName', 'lastName', 'phoneNumber']
-            }
-          ]
-        }
-      ]
-    });
-
-    if (!association) {
-      return res.status(404).json({
-        success: false,
-        message: 'Association non trouvée'
-      });
-    }
-
-    res.status(200).json({
-      success: true,
-      data: {
-        association
+      if (!association) {
+        return res.status(404).json({
+          error: 'Association introuvable',
+          code: 'ASSOCIATION_NOT_FOUND'
+        });
       }
-    });
 
-  } catch (error) {
-    console.error('Erreur récupération association:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Erreur lors de la récupération de l\'association'
-    });
-  }
-};
-
-// @desc    Mettre à jour une association
-// @route   PUT /api/v1/associations/:id
-// @access  Private (Bureau central)
-const updateAssociation = async (req, res) => {
-  try {
-    const { id } = req.params;
-    
-    // Vérifier que l'utilisateur est membre du bureau central
-    const membership = await AssociationMember.findOne({
-      where: {
-        userId: req.userId,
-        associationId: id,
-        status: 'active',
-        role: ['president', 'secretary', 'treasurer', 'central_board']
+      // Masquer informations sensibles selon permissions
+      const response = association.toJSON();
+      
+      if (!this.checkPermission(membership, 'view_finances') && req.user.role !== 'super_admin') {
+        delete response.totalBalance;
+        delete response.monthlyRevenue;
+        delete response.iban;
       }
-    });
 
-    if (!membership) {
-      return res.status(403).json({
-        success: false,
-        message: 'Seuls les membres du bureau peuvent modifier l\'association'
-      });
-    }
-
-    const association = await Association.findByPk(id);
-    
-    if (!association) {
-      return res.status(404).json({
-        success: false,
-        message: 'Association non trouvée'
-      });
-    }
-
-    const allowedUpdates = [
-      'description', 'headquartersAddress', 'contactInfo', 'website',
-      'memberTypes', 'accessRights', 'theme', 'centralBoard'
-    ];
-
-    const updates = {};
-    allowedUpdates.forEach(field => {
-      if (req.body[field] !== undefined) {
-        updates[field] = req.body[field];
-      }
-    });
-
-    await association.update(updates);
-
-    res.status(200).json({
-      success: true,
-      message: 'Association mise à jour avec succès',
-      data: {
-        association
-      }
-    });
-
-  } catch (error) {
-    console.error('Erreur mise à jour association:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Erreur lors de la mise à jour'
-    });
-  }
-};
-
-// @desc    Rejoindre une association
-// @route   POST /api/v1/associations/:id/join
-// @access  Private
-const joinAssociation = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { sectionId, memberType, message } = req.body;
-
-    const association = await Association.findByPk(id);
-    
-    if (!association || association.status !== 'active') {
-      return res.status(404).json({
-        success: false,
-        message: 'Association non trouvée ou inactive'
-      });
-    }
-
-    // Vérifier si déjà membre
-    const existingMembership = await AssociationMember.findOne({
-      where: {
-        userId: req.userId,
-        associationId: id
-      }
-    });
-
-    if (existingMembership) {
-      return res.status(400).json({
-        success: false,
-        message: 'Vous êtes déjà membre de cette association'
-      });
-    }
-
-    // Créer la demande d'adhésion
-    const membership = await AssociationMember.create({
-      userId: req.userId,
-      associationId: id,
-      sectionId: sectionId || null,
-      memberType: memberType || 'cdi',
-      status: 'pending',
-      joinDate: new Date(),
-      notes: message
-    });
-
-    // Inclure les détails utilisateur
-    const membershipWithUser = await AssociationMember.findByPk(membership.id, {
-      include: [
-        { model: User, as: 'user' },
-        { model: Association, as: 'association' },
-        { model: Section, as: 'section' }
-      ]
-    });
-
-    res.status(201).json({
-      success: true,
-      message: 'Demande d\'adhésion envoyée avec succès',
-      data: {
-        membership: membershipWithUser
-      }
-    });
-
-  } catch (error) {
-    console.error('Erreur adhésion association:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Erreur lors de l\'envoi de la demande'
-    });
-  }
-};
-
-// @desc    Valider/Rejeter un membre
-// @route   PATCH /api/v1/associations/:id/members/:memberId/validate
-// @access  Private (Bureau)
-const validateMember = async (req, res) => {
-  try {
-    const { id, memberId } = req.params;
-    const { action, reason } = req.body; // action: 'approve' | 'reject'
-
-    // Vérifier droits bureau
-    const adminMembership = await AssociationMember.findOne({
-      where: {
-        userId: req.userId,
-        associationId: id,
-        status: 'active',
-        role: ['president', 'secretary', 'treasurer', 'central_board']
-      }
-    });
-
-    if (!adminMembership) {
-      return res.status(403).json({
-        success: false,
-        message: 'Droits insuffisants pour valider les membres'
-      });
-    }
-
-    const membership = await AssociationMember.findByPk(memberId, {
-      include: [{ model: User, as: 'user' }]
-    });
-
-    if (!membership || membership.associationId !== parseInt(id)) {
-      return res.status(404).json({
-        success: false,
-        message: 'Membre non trouvé'
-      });
-    }
-
-    if (action === 'approve') {
-      await membership.update({
-        status: 'active',
-        validatedAt: new Date(),
-        validatedBy: req.userId,
-        statusReason: reason
-      });
-
-      res.status(200).json({
+      res.json({
         success: true,
-        message: 'Membre approuvé avec succès',
-        data: { membership }
+        data: {
+          association: response,
+          userMembership: membership,
+          userPermissions: await this.getUserPermissions(req.user.id, id)
+        }
       });
 
-    } else if (action === 'reject') {
-      await membership.update({
-        status: 'excluded',
-        statusReason: reason,
-        lastStatusChange: new Date()
+    } catch (error) {
+      console.error('Erreur récupération association:', error);
+      res.status(500).json({
+        error: 'Erreur récupération association',
+        code: 'ASSOCIATION_FETCH_ERROR',
+        details: error.message
+      });
+    }
+  }
+
+  // 📝 MODIFIER ASSOCIATION
+  async updateAssociation(req, res) {
+    try {
+      const { id } = req.params;
+      const updates = req.body;
+
+      // Vérifier permissions modification
+      const membership = await AssociationMember.findOne({
+        where: {
+          userId: req.user.id,
+          associationId: id,
+          status: 'active'
+        }
       });
 
-      res.status(200).json({
+      const canModify = membership && 
+        (['president', 'central_board'].includes(membership.roles?.[0]) || 
+         req.user.role === 'super_admin');
+
+      if (!canModify) {
+        return res.status(403).json({
+          error: 'Permissions insuffisantes pour modifier',
+          code: 'INSUFFICIENT_PERMISSIONS',
+          required: 'president ou central_board'
+        });
+      }
+
+      // Validation spéciale pour modification critique
+      const criticalFields = ['memberTypes', 'bureauCentral', 'permissionsMatrix'];
+      const hasCriticalChanges = Object.keys(updates).some(key => criticalFields.includes(key));
+
+      if (hasCriticalChanges && membership.roles?.[0] !== 'president' && req.user.role !== 'super_admin') {
+        return res.status(403).json({
+          error: 'Seul le président peut modifier la configuration',
+          code: 'PRESIDENT_ONLY_CONFIG'
+        });
+      }
+
+      // Mise à jour
+      const [updatedCount] = await Association.update(updates, {
+        where: { id },
+        returning: true
+      });
+
+      if (updatedCount === 0) {
+        return res.status(404).json({
+          error: 'Association introuvable',
+          code: 'ASSOCIATION_NOT_FOUND'
+        });
+      }
+
+      // Retourner association mise à jour
+      const updatedAssociation = await Association.findByPk(id, {
+        include: [
+          { model: Section, as: 'sections' },
+          { 
+            model: AssociationMember, 
+            as: 'members',
+            include: [{ model: User, as: 'user', attributes: ['id', 'fullName'] }]
+          }
+        ]
+      });
+
+      res.json({
         success: true,
-        message: 'Membre rejeté',
-        data: { membership }
+        message: 'Association mise à jour avec succès',
+        data: { association: updatedAssociation }
       });
 
-    } else {
-      return res.status(400).json({
-        success: false,
-        message: 'Action invalide (approve ou reject)'
+    } catch (error) {
+      console.error('Erreur modification association:', error);
+      res.status(500).json({
+        error: 'Erreur modification association',
+        code: 'ASSOCIATION_UPDATE_ERROR',
+        details: error.message
       });
     }
-
-  } catch (error) {
-    console.error('Erreur validation membre:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Erreur lors de la validation'
-    });
   }
-};
 
-// @desc    Récupérer les membres d'une association
-// @route   GET /api/v1/associations/:id/members
-// @access  Private (Membres)
-const getAssociationMembers = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { status = 'active', page = 1, limit = 20 } = req.query;
+  // 📋 LISTER ASSOCIATIONS DE L'UTILISATEUR
+  async listUserAssociations(req, res) {
+    try {
+      const { page = 1, limit = 20, status = 'active' } = req.query;
+      const offset = (page - 1) * limit;
 
-    // Vérifier que l'utilisateur est membre
-    const requesterMembership = await AssociationMember.findOne({
-      where: {
-        userId: req.userId,
-        associationId: id,
-        status: 'active'
-      }
-    });
-
-    if (!requesterMembership) {
-      return res.status(403).json({
-        success: false,
-        message: 'Vous devez être membre pour voir la liste'
-      });
-    }
-
-    const offset = (page - 1) * limit;
-
-    const { count, rows: members } = await AssociationMember.findAndCountAll({
-      where: {
-        associationId: id,
-        status
-      },
-      include: [
-        {
-          model: User,
-          as: 'user',
-          attributes: ['id', 'firstName', 'lastName', 'phoneNumber']
+      // Récupérer associations de l'utilisateur
+      const { rows: memberships, count } = await AssociationMember.findAndCountAll({
+        where: {
+          userId: req.user.id,
+          ...(status !== 'all' && { status })
         },
-        {
-          model: Section,
-          as: 'section',
-          attributes: ['id', 'name', 'country']
-        }
-      ],
-      limit: parseInt(limit),
-      offset,
-      order: [['joinDate', 'ASC']]
-    });
+        include: [
+          {
+            model: Association,
+            as: 'association',
+            include: [
+              { model: Section, as: 'sections' }
+            ]
+          },
+          {
+            model: Section,
+            as: 'section'
+          }
+        ],
+        limit: parseInt(limit),
+        offset: parseInt(offset),
+        order: [['created_at', 'DESC']]
+      });
 
-    res.status(200).json({
-      success: true,
-      data: {
-        members,
-        pagination: {
-          current: parseInt(page),
-          pages: Math.ceil(count / limit),
-          total: count
+      // Formater réponse avec stats
+      const associations = memberships.map(membership => {
+        const assoc = membership.association;
+        return {
+          id: assoc.id,
+          name: assoc.name,
+          description: assoc.description,
+          country: assoc.country,
+          status: assoc.status,
+          sectionsCount: assoc.sections?.length || 0,
+          membersCount: assoc.membersCount || 0,
+          userMembership: {
+            memberType: membership.memberType,
+            roles: membership.roles,
+            status: membership.status,
+            seniority: membership.getTotalSeniority(),
+            section: membership.section
+          },
+          createdAt: assoc.createdAt
+        };
+      });
+
+      res.json({
+        success: true,
+        data: {
+          associations,
+          pagination: {
+            page: parseInt(page),
+            limit: parseInt(limit),
+            total: count,
+            pages: Math.ceil(count / limit)
+          }
+        }
+      });
+
+    } catch (error) {
+      console.error('Erreur liste associations:', error);
+      res.status(500).json({
+        error: 'Erreur récupération associations',
+        code: 'ASSOCIATIONS_FETCH_ERROR',
+        details: error.message
+      });
+    }
+  }
+
+  // 🗑️ SUPPRIMER ASSOCIATION (soft delete)
+  async deleteAssociation(req, res) {
+    try {
+      const { id } = req.params;
+
+      // Seul le président ou super admin peut supprimer
+      const membership = await AssociationMember.findOne({
+        where: {
+          userId: req.user.id,
+          associationId: id,
+          status: 'active'
+        }
+      });
+
+      const canDelete = (membership && membership.roles?.includes('president')) || 
+                       req.user.role === 'super_admin';
+
+      if (!canDelete) {
+        return res.status(403).json({
+          error: 'Seul le président peut supprimer l\'association',
+          code: 'PRESIDENT_ONLY_DELETE'
+        });
+      }
+
+      // Vérifier s'il y a des transactions en cours
+      const pendingTransactions = await Transaction.count({
+        where: {
+          associationId: id,
+          status: ['pending', 'processing']
+        }
+      });
+
+      if (pendingTransactions > 0) {
+        return res.status(400).json({
+          error: 'Impossible de supprimer: transactions en cours',
+          code: 'PENDING_TRANSACTIONS',
+          count: pendingTransactions
+        });
+      }
+
+      // Soft delete
+      await Association.update(
+        { status: 'deleted' },
+        { where: { id } }
+      );
+
+      // Désactiver tous les membres
+      await AssociationMember.update(
+        { status: 'inactive' },
+        { where: { associationId: id } }
+      );
+
+      res.json({
+        success: true,
+        message: 'Association supprimée avec succès'
+      });
+
+    } catch (error) {
+      console.error('Erreur suppression association:', error);
+      res.status(500).json({
+        error: 'Erreur suppression association',
+        code: 'ASSOCIATION_DELETE_ERROR',
+        details: error.message
+      });
+    }
+  }
+
+  // 📊 STATISTIQUES ASSOCIATION
+  async getAssociationStats(req, res) {
+    try {
+      const { id } = req.params;
+
+      // Vérifier accès
+      const membership = await AssociationMember.findOne({
+        where: {
+          userId: req.user.id,
+          associationId: id,
+          status: 'active'
+        }
+      });
+
+      if (!membership && req.user.role !== 'super_admin') {
+        return res.status(403).json({
+          error: 'Accès non autorisé',
+          code: 'ACCESS_DENIED'
+        });
+      }
+
+      // Calculer statistiques
+      const [
+        totalMembers,
+        activeMembers,
+        monthlyRevenue,
+        totalTransactions,
+        sectionsCount
+      ] = await Promise.all([
+        AssociationMember.count({ where: { associationId: id } }),
+        AssociationMember.count({ where: { associationId: id, status: 'active' } }),
+        Transaction.sum('amount', {
+          where: {
+            associationId: id,
+            type: 'cotisation',
+            status: 'completed',
+            createdAt: {
+              [Op.gte]: new Date(new Date().getFullYear(), new Date().getMonth(), 1)
+            }
+          }
+        }),
+        Transaction.count({
+          where: {
+            associationId: id,
+            status: 'completed'
+          }
+        }),
+        Section.count({ where: { associationId: id } })
+      ]);
+
+      res.json({
+        success: true,
+        data: {
+          members: {
+            total: totalMembers,
+            active: activeMembers,
+            inactive: totalMembers - activeMembers
+          },
+          finances: {
+            monthlyRevenue: parseFloat(monthlyRevenue || 0),
+            totalTransactions
+          },
+          structure: {
+            sectionsCount,
+            type: sectionsCount > 0 ? 'multi-sections' : 'simple'
+          },
+          lastUpdated: new Date()
+        }
+      });
+
+    } catch (error) {
+      console.error('Erreur statistiques association:', error);
+      res.status(500).json({
+        error: 'Erreur récupération statistiques',
+        code: 'STATS_FETCH_ERROR',
+        details: error.message
+      });
+    }
+  }
+
+  // 🔧 METTRE À JOUR CONFIGURATION
+  async updateConfiguration(req, res) {
+    try {
+      const { id } = req.params;
+      const { memberTypes, bureauCentral, permissionsMatrix, settings } = req.body;
+
+      // Vérifier permissions (président uniquement)
+      const membership = await AssociationMember.findOne({
+        where: {
+          userId: req.user.id,
+          associationId: id,
+          status: 'active'
+        }
+      });
+
+      const canModifyConfig = (membership && membership.roles?.includes('president')) || 
+                             req.user.role === 'super_admin';
+
+      if (!canModifyConfig) {
+        return res.status(403).json({
+          error: 'Seul le président peut modifier la configuration',
+          code: 'PRESIDENT_ONLY_CONFIG'
+        });
+      }
+
+      // Préparer mise à jour
+      const updates = {};
+      if (memberTypes) updates.memberTypes = memberTypes;
+      if (bureauCentral) updates.bureauCentral = bureauCentral;
+      if (permissionsMatrix) updates.permissionsMatrix = permissionsMatrix;
+      if (settings) updates.settings = settings;
+
+      // Mettre à jour
+      await Association.update(updates, { where: { id } });
+
+      // Si modification types membres, mettre à jour cotisations existantes
+      if (memberTypes) {
+        await this.updateMemberCotisations(id, memberTypes);
+      }
+
+      res.json({
+        success: true,
+        message: 'Configuration mise à jour avec succès',
+        updated: Object.keys(updates)
+      });
+
+    } catch (error) {
+      console.error('Erreur mise à jour configuration:', error);
+      res.status(500).json({
+        error: 'Erreur mise à jour configuration',
+        code: 'CONFIG_UPDATE_ERROR',
+        details: error.message
+      });
+    }
+  }
+
+  // 🔍 RECHERCHER ASSOCIATIONS PUBLIQUES
+  async searchPublicAssociations(req, res) {
+    try {
+      const { q, country, city, page = 1, limit = 20 } = req.query;
+      const offset = (page - 1) * limit;
+
+      const whereClause = {
+        status: 'active',
+        isPublic: true
+      };
+
+      if (q) {
+        whereClause[Op.or] = [
+          { name: { [Op.iLike]: `%${q}%` } },
+          { description: { [Op.iLike]: `%${q}%` } }
+        ];
+      }
+
+      if (country) whereClause.country = country;
+      if (city) whereClause.city = { [Op.iLike]: `%${city}%` };
+
+      const { rows: associations, count } = await Association.findAndCountAll({
+        where: whereClause,
+        attributes: ['id', 'name', 'description', 'country', 'city', 'membersCount', 'createdAt'],
+        include: [
+          {
+            model: Section,
+            as: 'sections',
+            attributes: ['id', 'name', 'country', 'city']
+          }
+        ],
+        limit: parseInt(limit),
+        offset: parseInt(offset),
+        order: [['membersCount', 'DESC'], ['createdAt', 'DESC']]
+      });
+
+      res.json({
+        success: true,
+        data: {
+          associations,
+          pagination: {
+            page: parseInt(page),
+            limit: parseInt(limit),
+            total: count,
+            pages: Math.ceil(count / limit)
+          }
+        }
+      });
+
+    } catch (error) {
+      console.error('Erreur recherche associations:', error);
+      res.status(500).json({
+        error: 'Erreur recherche associations',
+        code: 'SEARCH_ERROR',
+        details: error.message
+      });
+    }
+  }
+
+  // 🔐 UTILITAIRES PERMISSIONS
+  checkPermission(membership, action) {
+    if (!membership || !membership.association) return false;
+    
+    const permissions = membership.association.permissionsMatrix || {};
+    const actionConfig = permissions[action];
+    
+    if (!actionConfig) return false;
+    
+    const userRoles = membership.roles || [];
+    const allowedRoles = actionConfig.allowed_roles || [];
+    
+    return userRoles.some(role => allowedRoles.includes(role));
+  }
+
+  async getUserPermissions(userId, associationId) {
+    try {
+      const membership = await AssociationMember.findOne({
+        where: { userId, associationId, status: 'active' },
+        include: [{ model: Association, as: 'association' }]
+      });
+
+      if (!membership) return {};
+
+      const permissionsMatrix = membership.association.permissionsMatrix || {};
+      const userRoles = membership.roles || [];
+      const userPermissions = {};
+
+      // Calculer permissions effectives
+      Object.keys(permissionsMatrix).forEach(action => {
+        const config = permissionsMatrix[action];
+        const allowedRoles = config.allowed_roles || [];
+        userPermissions[action] = userRoles.some(role => allowedRoles.includes(role));
+      });
+
+      return userPermissions;
+    } catch (error) {
+      console.error('Erreur calcul permissions:', error);
+      return {};
+    }
+  }
+
+  // 🔄 Mettre à jour cotisations suite changement types membres
+  async updateMemberCotisations(associationId, newMemberTypes) {
+    try {
+      const members = await AssociationMember.findAll({
+        where: { associationId, status: 'active' }
+      });
+
+      for (const member of members) {
+        const memberTypeConfig = newMemberTypes.find(type => type.name === member.memberType);
+        
+        if (memberTypeConfig) {
+          await member.update({
+            cotisationAmount: memberTypeConfig.cotisationAmount
+          });
         }
       }
-    });
-
-  } catch (error) {
-    console.error('Erreur récupération membres:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Erreur lors de la récupération des membres'
-    });
+    } catch (error) {
+      console.error('Erreur mise à jour cotisations membres:', error);
+      throw error;
+    }
   }
-};
+}
 
-module.exports = {
-  createAssociation,
-  getAssociations,
-  getAssociation,
-  updateAssociation,
-  joinAssociation,
-  validateMember,
-  getAssociationMembers,
-  createAssociationValidation
-};
+module.exports = new AssociationController();

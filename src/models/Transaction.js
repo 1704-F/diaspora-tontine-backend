@@ -10,71 +10,80 @@ module.exports = (sequelize, DataTypes) => {
         as: 'user'
       });
       
-      // Une transaction peut appartenir à une association
+      // Transaction peut concerner une association
       Transaction.belongsTo(models.Association, {
         foreignKey: 'associationId',
         as: 'association'
       });
       
-      // Une transaction peut appartenir à une section
+      // Transaction peut concerner une section
       Transaction.belongsTo(models.Section, {
         foreignKey: 'sectionId',
         as: 'section'
       });
       
-      // Une transaction peut appartenir à un membership association
+      // Transaction peut concerner un membre association
       Transaction.belongsTo(models.AssociationMember, {
-        foreignKey: 'membershipId',
-        as: 'membership'
+        foreignKey: 'memberId',
+        as: 'member'
       });
       
-      // Une transaction peut appartenir à une tontine
+      // Transaction peut concerner une tontine
       Transaction.belongsTo(models.Tontine, {
         foreignKey: 'tontineId',
         as: 'tontine'
       });
       
-      // Une transaction peut appartenir à un participant tontine
+      // Transaction peut concerner un participant tontine
       Transaction.belongsTo(models.TontineParticipant, {
         foreignKey: 'participantId',
         as: 'participant'
       });
     }
 
-    // Calculer commission plateforme
-    calculatePlatformCommission() {
-      const rate = 0.025; // 2.5%
-      const fixedFee = 0.25; // 0.25€
-      return parseFloat((this.amount * rate + fixedFee).toFixed(2));
+    // Calculer commission sur cette transaction
+    calculateCommission() {
+      if (['cotisation', 'cotisation_tontine', 'aide'].includes(this.type)) {
+        const baseCommission = this.amount * 0.025; // 2.5%
+        const fixedFee = 0.25; // 0.25€
+        return parseFloat((baseCommission + fixedFee).toFixed(2));
+      }
+      return 0;
     }
 
-    // Vérifier si transaction est en retard
-    isLate() {
-      if (this.status !== 'pending') return false;
-      if (!this.dueDate) return false;
-      
-      return new Date() > this.dueDate;
+    // Calculer montant net (après commission)
+    getNetAmount() {
+      const commission = this.commissionAmount || this.calculateCommission();
+      return parseFloat((this.amount - commission).toFixed(2));
     }
 
-    // Obtenir délai en jours
-    getDaysLate() {
-      if (!this.isLate()) return 0;
-      
-      const diffTime = Math.abs(new Date() - this.dueDate);
-      return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    // Vérifier si transaction est en attente
+    isPending() {
+      return ['pending', 'processing'].includes(this.status);
     }
 
-    // Formater pour affichage
-    getDisplayInfo() {
-      return {
-        id: this.id,
-        type: this.type,
-        amount: this.amount,
-        currency: this.currency,
-        status: this.status,
-        date: this.createdAt,
-        description: this.description
+    // Vérifier si transaction est réussie
+    isCompleted() {
+      return this.status === 'completed';
+    }
+
+    // Vérifier si transaction a échoué
+    isFailed() {
+      return ['failed', 'cancelled', 'refunded'].includes(this.status);
+    }
+
+    // Obtenir description formatée selon le type
+    getFormattedDescription() {
+      const descriptions = {
+        'cotisation': `Cotisation ${this.month}/${this.year}`,
+        'cotisation_tontine': `Cotisation tontine`,
+        'aide': 'Aide financière',
+        'versement_tontine': 'Versement tontine',
+        'remboursement': 'Remboursement',
+        'commission': 'Commission DiasporaTontine'
       };
+      
+      return descriptions[this.type] || this.description || 'Transaction';
     }
   }
 
@@ -85,7 +94,7 @@ module.exports = (sequelize, DataTypes) => {
       autoIncrement: true
     },
     
-    // 🔗 RELATIONS FLEXIBLES
+    // 🔗 RELATIONS CONTEXTUELLES
     userId: {
       type: DataTypes.INTEGER,
       allowNull: false,
@@ -103,7 +112,7 @@ module.exports = (sequelize, DataTypes) => {
         model: 'associations',
         key: 'id'
       },
-      comment: 'Association concernée (si transaction association)'
+      comment: 'Association concernée (pour cotisations/aides)'
     },
     
     sectionId: {
@@ -113,17 +122,17 @@ module.exports = (sequelize, DataTypes) => {
         model: 'sections',
         key: 'id'
       },
-      comment: 'Section concernée (si transaction association multi-sections)'
+      comment: 'Section concernée (pour associations multi-sections)'
     },
     
-    membershipId: {
+    memberId: {
       type: DataTypes.INTEGER,
       allowNull: true,
       references: {
         model: 'association_members',
         key: 'id'
       },
-      comment: 'Membership association concerné'
+      comment: 'Membre association concerné'
     },
     
     tontineId: {
@@ -133,7 +142,7 @@ module.exports = (sequelize, DataTypes) => {
         model: 'tontines',
         key: 'id'
       },
-      comment: 'Tontine concernée (si transaction tontine)'
+      comment: 'Tontine concernée (pour cotisations/versements tontine)'
     },
     
     participantId: {
@@ -147,42 +156,24 @@ module.exports = (sequelize, DataTypes) => {
     },
     
     // 🏷️ IDENTIFICATION TRANSACTION
-    transactionNumber: {
-  type: DataTypes.STRING,
-  allowNull: false,
-  // unique: true,  ← COMMENTÉ TEMPORAIREMENT
-  comment: 'Numéro unique transaction: TRX20250824001'
-},
-    
     type: {
       type: DataTypes.ENUM(
-        // ASSOCIATION
-        'cotisation_association',      // Cotisation mensuelle association
-        'aide_association',           // Aide versée par association
-        'subscription_association',   // Abonnement 10€/mois association
-        
-        // TONTINE
-        'cotisation_tontine',         // Cotisation mensuelle tontine
-        'versement_tontine',          // Versement reçu dans tontine
-        
-        // PLATFORM
-        'commission',                 // Commission plateforme
-        'refund',                    // Remboursement
-        'penalty',                   // Pénalité retard
-        'transfer',                  // Transfert entre comptes
-        
-        // AUTRES
-        'deposit',                   // Dépôt fonds
-        'withdrawal',               // Retrait fonds
-        'adjustment'               // Ajustement comptable
+        'cotisation',           // Cotisation association
+        'cotisation_tontine',   // Cotisation tontine
+        'aide',                 // Aide association
+        'versement_tontine',    // Versement tontine (bénéficiaire)
+        'remboursement',        // Remboursement défaillance
+        'commission',           // Commission DiasporaTontine
+        'refund'               // Remboursement client
       ),
-      allowNull: false
+      allowNull: false,
+      comment: 'Type de transaction'
     },
     
-    subType: {
-      type: DataTypes.STRING,
+    category: {
+      type: DataTypes.STRING(50),
       allowNull: true,
-      comment: 'Sous-type pour précision: aide_maladie, aide_deces, etc.'
+      comment: 'Catégorie spécifique (configurable par association/tontine)'
     },
     
     // 💰 MONTANTS
@@ -191,170 +182,202 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: false,
       validate: {
         min: 0.01
-      }
+      },
+      comment: 'Montant brut de la transaction'
     },
     
-    currency: {
-      type: DataTypes.STRING,
+    commissionAmount: {
+      type: DataTypes.DECIMAL(10, 2),
       allowNull: false,
-      defaultValue: 'EUR',
-      validate: {
-        isIn: [['EUR', 'USD', 'XOF', 'GBP', 'CAD']]
-      }
-    },
-    
-    // Commissions et frais
-    platformCommission: {
-      type: DataTypes.DECIMAL(8, 2),
       defaultValue: 0.00,
-      comment: 'Commission plateforme (2.5% + 0.25€)'
-    },
-    
-    paymentProviderFees: {
-      type: DataTypes.DECIMAL(8, 2),
-      defaultValue: 0.00,
-      comment: 'Frais PSP (Stripe, Square)'
+      comment: 'Montant commission DiasporaTontine (calculé automatiquement)'
     },
     
     netAmount: {
       type: DataTypes.DECIMAL(10, 2),
       allowNull: false,
-      comment: 'Montant net après commissions'
+      comment: 'Montant net (après commission)'
     },
     
-    // 📊 STATUT & SUIVI
+    currency: {
+      type: DataTypes.STRING(3),
+      allowNull: false,
+      defaultValue: 'EUR',
+      comment: 'Devise de la transaction'
+    },
+    
+    // 📅 PÉRIODE (pour cotisations)
+    month: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      validate: {
+        min: 1,
+        max: 12
+      },
+      comment: 'Mois concerné (cotisations)'
+    },
+    
+    year: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      validate: {
+        min: 2020,
+        max: 2050
+      },
+      comment: 'Année concernée (cotisations)'
+    },
+    
+    // 💳 PAIEMENT
+    paymentMethod: {
+      type: DataTypes.ENUM('card', 'iban', 'mobile_money', 'cash', 'internal'),
+      allowNull: false,
+      comment: 'Méthode de paiement utilisée'
+    },
+    
+    paymentProvider: {
+      type: DataTypes.STRING(20),
+      allowNull: true,
+      comment: 'Fournisseur paiement (stripe, square, flutterwave)'
+    },
+    
+    externalTransactionId: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+      comment: 'ID transaction chez le PSP (Stripe, Square)'
+    },
+    
+    paymentMethodId: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+      comment: 'ID méthode paiement (carte, IBAN)'
+    },
+    
+    // 🔄 STATUT & SUIVI
     status: {
       type: DataTypes.ENUM(
-        'pending',           // En attente
-        'processing',        // En cours de traitement
-        'completed',         // Terminée avec succès
-        'failed',           // Échec
-        'cancelled',        // Annulée
-        'late',            // En retard
-        'disputed',        // Contestée
-        'refunded',        // Remboursée
-        'partially_refunded' // Partiellement remboursée
+        'pending',      // En attente
+        'processing',   // En cours traitement
+        'completed',    // Terminée avec succès
+        'failed',       // Échec
+        'cancelled',    // Annulée
+        'refunded',     // Remboursée
+        'late'          // En retard (cotisations)
       ),
       allowNull: false,
-      defaultValue: 'pending'
+      defaultValue: 'pending',
+      comment: 'Statut de la transaction'
     },
     
-    statusReason: {
+    failureReason: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+      comment: 'Raison de l\'échec (si applicable)'
+    },
+    
+    // 📝 DESCRIPTION
+    description: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+      comment: 'Description de la transaction'
+    },
+    
+    notes: {
       type: DataTypes.TEXT,
       allowNull: true,
-      comment: 'Raison du statut (échec, contestation, etc.)'
+      comment: 'Notes internes (gestion, validation)'
     },
     
-    // 📅 DATES
-    dueDate: {
+    // 🎯 WORKFLOW VALIDATION
+    requiresApproval: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      comment: 'Transaction nécessite approbation bureau'
+    },
+    
+    approvedBy: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: 'users',
+        key: 'id'
+      },
+      comment: 'Utilisateur ayant approuvé'
+    },
+    
+    approvedAt: {
       type: DataTypes.DATE,
       allowNull: true,
-      comment: 'Date d\'échéance (pour cotisations)'
+      comment: 'Date/heure approbation'
+    },
+    
+    // 🔄 RÉCURRENCE (prélèvements auto)
+    isRecurring: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      comment: 'Transaction récurrente (prélèvement auto)'
+    },
+    
+    recurringId: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+      comment: 'ID abonnement récurrent PSP'
+    },
+    
+    nextOccurrence: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      comment: 'Prochaine occurrence (si récurrent)'
+    },
+    
+    // 📊 MÉTADONNÉES
+    metadata: {
+      type: DataTypes.JSON,
+      allowNull: true,
+      comment: 'Données additionnelles (contexte, config spécifique)'
+    },
+    
+    // 🔍 AUDIT TRAIL
+    source: {
+      type: DataTypes.ENUM('imported', 'app', 'manual'),
+      allowNull: false,
+      defaultValue: 'app',
+      comment: 'Source de la transaction (import historique, app, saisie manuelle)'
+    },
+    
+    ipAddress: {
+      type: DataTypes.STRING(45),
+      allowNull: true,
+      comment: 'Adresse IP origine transaction'
+    },
+    
+    userAgent: {
+      type: DataTypes.STRING(500),
+      allowNull: true,
+      comment: 'User agent client'
+    },
+    
+    // 📅 DATES IMPORTANTES
+    scheduledDate: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      comment: 'Date prévue transaction (prélèvements auto)'
     },
     
     processedAt: {
       type: DataTypes.DATE,
       allowNull: true,
-      comment: 'Date de traitement effectif'
+      comment: 'Date/heure traitement effectif'
     },
     
     completedAt: {
       type: DataTypes.DATE,
-      allowNull: true
-    },
-    
-    // 💳 INFORMATIONS PAIEMENT
-    paymentMethod: {
-      type: DataTypes.ENUM(
-        'card',              // Carte bancaire
-        'bank_transfer',     // Virement bancaire
-        'mobile_money',      // Mobile Money (Afrique)
-        'cash',             // Espèces (déclaré)
-        'check',            // Chèque
-        'other'             // Autre
-      ),
-      allowNull: false,
-      defaultValue: 'card'
-    },
-    
-    paymentProvider: {
-      type: DataTypes.ENUM('stripe', 'square', 'flutterwave', 'manual', 'other'),
-      allowNull: false,
-      defaultValue: 'stripe'
-    },
-    
-    // IDs externes des PSP
-    stripePaymentId: {
-      type: DataTypes.STRING,
       allowNull: true,
-      comment: 'ID Stripe: pi_xxx'
+      comment: 'Date/heure finalisation'
     },
     
-    squarePaymentId: {
-      type: DataTypes.STRING,
-      allowNull: true,
-      comment: 'ID Square'
-    },
-    
-    externalTransactionId: {
-      type: DataTypes.STRING,
-      allowNull: true,
-      comment: 'ID transaction externe (banque, etc.)'
-    },
-    
-    // 📱 INFORMATIONS CARTE/COMPTE
-    cardLast4: {
-      type: DataTypes.STRING,
-      allowNull: true,
-      validate: {
-        len: [4, 4],
-        isNumeric: true
-      }
-    },
-    
-    cardBrand: {
-      type: DataTypes.STRING,
-      allowNull: true,
-      comment: 'visa, mastercard, amex'
-    },
-    
-    bankName: {
-      type: DataTypes.STRING,
-      allowNull: true
-    },
-    
-    // 📝 DESCRIPTION & METADATA
-    description: {
-      type: DataTypes.TEXT,
-      allowNull: true,
-      comment: 'Description de la transaction'
-    },
-    
-    reference: {
-      type: DataTypes.STRING,
-      allowNull: true,
-      comment: 'Référence externe (numéro facture, etc.)'
-    },
-    
-    metadata: {
-      type: DataTypes.JSON,
-      allowNull: true,
-      comment: 'Données additionnelles (webhook data, etc.)'
-    },
-    
-    // 🔄 RECURRENCE & AUTOMATISATION
-    isRecurring: {
-      type: DataTypes.BOOLEAN,
-      defaultValue: false,
-      comment: 'Transaction récurrente (cotisations auto)'
-    },
-    
-    recurringId: {
-      type: DataTypes.STRING,
-      allowNull: true,
-      comment: 'ID abonnement récurrent'
-    },
-    
+    // 🔄 RELATIONS PARENT/ENFANT
     parentTransactionId: {
       type: DataTypes.INTEGER,
       allowNull: true,
@@ -362,277 +385,71 @@ module.exports = (sequelize, DataTypes) => {
         model: 'transactions',
         key: 'id'
       },
-      comment: 'Transaction parent (pour refunds, etc.)'
+      comment: 'Transaction parent (pour remboursements, corrections)'
     },
     
-    // 🚨 GESTION ECHECS & RETRIES
-    attemptCount: {
-      type: DataTypes.INTEGER,
-      defaultValue: 1,
-      comment: 'Nombre de tentatives'
-    },
-    
-    maxAttempts: {
-      type: DataTypes.INTEGER,
-      defaultValue: 3
-    },
-    
-    lastAttemptAt: {
-      type: DataTypes.DATE,
-      allowNull: true
-    },
-    
-    nextRetryAt: {
-      type: DataTypes.DATE,
-      allowNull: true
-    },
-    
-    failureReason: {
-      type: DataTypes.TEXT,
-      allowNull: true,
-      comment: 'Raison de l\'échec technique'
-    },
-    
-    // 📍 CONTEXT & TRACKING
-    ipAddress: {
-      type: DataTypes.STRING,
-      allowNull: true
-    },
-    
-    userAgent: {
-      type: DataTypes.TEXT,
-      allowNull: true
-    },
-    
-    deviceFingerprint: {
-      type: DataTypes.STRING,
-      allowNull: true
-    },
-    
-    // 🌍 LOCALISATION
-    country: {
-      type: DataTypes.STRING,
-      allowNull: true,
-      comment: 'Pays émission carte/paiement'
-    },
-    
-    exchangeRate: {
-      type: DataTypes.DECIMAL(10, 6),
-      allowNull: true,
-      comment: 'Taux change si conversion devise'
-    },
-    
-    originalCurrency: {
-      type: DataTypes.STRING,
-      allowNull: true,
-      comment: 'Devise originale avant conversion'
-    },
-    
-    originalAmount: {
-      type: DataTypes.DECIMAL(10, 2),
-      allowNull: true,
-      comment: 'Montant original avant conversion'
-    },
-    
-    // 🔐 SECURITY & FRAUD
-    riskScore: {
-      type: DataTypes.DECIMAL(3, 2),
-      allowNull: true,
-      validate: {
-        min: 0.00,
-        max: 1.00
-      },
-      comment: 'Score risque fraud (0-1)'
-    },
-    
-    fraudChecks: {
-      type: DataTypes.JSON,
-      allowNull: true,
-      comment: 'Résultats vérifications anti-fraud'
-    },
-    
-    isHighRisk: {
-      type: DataTypes.BOOLEAN,
-      defaultValue: false
-    },
-    
-    // 📊 BUSINESS METRICS
-    monthYear: {
-      type: DataTypes.STRING,
+    // 📱 ORIGINE
+    originApp: {
+      type: DataTypes.STRING(20),
       allowNull: false,
-      comment: 'Format YYYY-MM pour agrégations rapides'
-    },
-    
-    fiscalYear: {
-      type: DataTypes.INTEGER,
-      allowNull: false,
-      comment: 'Année fiscale pour rapports'
-    },
-    
-    // 🔔 NOTIFICATIONS
-    userNotified: {
-      type: DataTypes.BOOLEAN,
-      defaultValue: false,
-      comment: 'Utilisateur notifié du résultat'
-    },
-    
-    adminNotified: {
-      type: DataTypes.BOOLEAN,
-      defaultValue: false,
-      comment: 'Admin notifié si nécessaire'
-    },
-    
-    // 📈 TRACKING BUSINESS
-    revenueImpact: {
-      type: DataTypes.DECIMAL(8, 2),
-      defaultValue: 0.00,
-      comment: 'Impact revenue pour la plateforme'
-    },
-    
-    customerLifetimeValue: {
-      type: DataTypes.DECIMAL(10, 2),
-      allowNull: true,
-      comment: 'LTV client au moment transaction'
+      defaultValue: 'mobile',
+      comment: 'Application origine (mobile, web, admin)'
     }
-    
   }, {
     sequelize,
     modelName: 'Transaction',
     tableName: 'transactions',
     underscored: true,
     timestamps: true,
-    paranoid: true, // Soft delete
     
+    indexes: [
+      {
+        fields: ['user_id']
+      },
+      {
+        fields: ['association_id']
+      },
+      {
+        fields: ['tontine_id']
+      },
+      {
+        fields: ['type']
+      },
+      {
+        fields: ['status']
+      },
+      {
+        fields: ['payment_method']
+      },
+      {
+        fields: ['external_transaction_id']
+      },
+      {
+        fields: ['month', 'year']
+      },
+      {
+        fields: ['created_at']
+      },
+      {
+        fields: ['scheduled_date']
+      },
+      {
+        fields: ['processed_at']
+      }
+    ],
+    
+    // Hook pour calculer automatiquement commission et net amount
     hooks: {
-      beforeCreate: (transaction) => {
-        // Générer numéro transaction unique
-        if (!transaction.transactionNumber) {
-          const date = new Date();
-          const year = date.getFullYear();
-          const month = (date.getMonth() + 1).toString().padStart(2, '0');
-          const day = date.getDate().toString().padStart(2, '0');
-          const timestamp = Date.now().toString().slice(-6);
-          transaction.transactionNumber = `TRX${year}${month}${day}${timestamp}`;
-        }
-        
-        // Calculer commission plateforme
-        if (!transaction.platformCommission && ['cotisation_association', 'cotisation_tontine'].includes(transaction.type)) {
-          const rate = 0.025; // 2.5%
-          const fixedFee = 0.25; // 0.25€
-          transaction.platformCommission = parseFloat((transaction.amount * rate + fixedFee).toFixed(2));
+      beforeValidate: (transaction) => {
+        // Calculer commission automatiquement si pas déjà définie
+        if (transaction.commissionAmount === 0) {
+          transaction.commissionAmount = transaction.calculateCommission();
         }
         
         // Calculer montant net
-        transaction.netAmount = parseFloat((
-          transaction.amount - 
-          (transaction.platformCommission || 0) - 
-          (transaction.paymentProviderFees || 0)
-        ).toFixed(2));
-        
-        // Générer monthYear et fiscalYear
-        const date = transaction.createdAt || new Date();
-        transaction.monthYear = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}`;
-        transaction.fiscalYear = date.getFullYear();
-        
-        // Impact revenue pour plateforme
-        if (['cotisation_association', 'cotisation_tontine', 'subscription_association'].includes(transaction.type)) {
-          transaction.revenueImpact = transaction.platformCommission || 0;
-        }
-      },
-      
-      beforeUpdate: (transaction) => {
-        // Mise à jour dates selon statut
-        if (transaction.changed('status')) {
-          const now = new Date();
-          
-          switch (transaction.status) {
-            case 'processing':
-              if (!transaction.processedAt) {
-                transaction.processedAt = now;
-              }
-              break;
-            case 'completed':
-              if (!transaction.completedAt) {
-                transaction.completedAt = now;
-              }
-              break;
-          }
-        }
-        
-        // Incrémenter tentatives si échec
-        if (transaction.changed('status') && transaction.status === 'failed') {
-          transaction.attemptCount = (transaction.attemptCount || 0) + 1;
-          transaction.lastAttemptAt = new Date();
-          
-          // Programmer prochaine tentative si pas max atteint
-          if (transaction.attemptCount < transaction.maxAttempts) {
-            const nextRetry = new Date();
-            nextRetry.setHours(nextRetry.getHours() + (transaction.attemptCount * 2)); // Backoff exponentiel
-            transaction.nextRetryAt = nextRetry;
-          }
-        }
-      },
-      
-      afterCreate: (transaction) => {
-        console.log(`💳 Transaction créée: ${transaction.transactionNumber} - ${transaction.amount}${transaction.currency} (${transaction.type})`);
-      },
-      
-      afterUpdate: async (transaction) => {
-        // Mettre à jour compteurs si transaction terminée
-        if (transaction.changed('status') && transaction.status === 'completed') {
-          
-          // Mettre à jour compteurs association member
-          if (transaction.membershipId && transaction.type === 'cotisation_association') {
-            const member = await transaction.getMembership();
-            if (member) {
-              await member.increment('totalContributed', { by: transaction.amount });
-              member.lastCotisationDate = transaction.completedAt;
-              member.cotisationStatus = 'up_to_date';
-              member.monthsBehind = 0;
-              await member.save();
-            }
-          }
-          
-          // Mettre à jour compteurs tontine participant
-          if (transaction.participantId && transaction.type === 'cotisation_tontine') {
-            const participant = await transaction.getParticipant();
-            if (participant) {
-              await participant.increment(['contributionsCount', 'totalContributed'], { 
-                contributionsCount: 1,
-                totalContributed: transaction.amount 
-              });
-              participant.lastContributionDate = transaction.completedAt;
-              await participant.save();
-            }
-          }
-        }
+        transaction.netAmount = transaction.amount - transaction.commissionAmount;
       }
-    },
-    
-    indexes: [
-      { fields: ['transaction_number'], unique: true },
-      { fields: ['user_id'] },
-      { fields: ['association_id'] },
-      { fields: ['section_id'] },
-      { fields: ['membership_id'] },
-      { fields: ['tontine_id'] },
-      { fields: ['participant_id'] },
-      { fields: ['type'] },
-      { fields: ['status'] },
-      { fields: ['payment_method'] },
-      { fields: ['payment_provider'] },
-      { fields: ['month_year'] },
-      { fields: ['fiscal_year'] },
-      { fields: ['is_recurring'] },
-      { fields: ['due_date'] },
-      { fields: ['completed_at'] },
-      { fields: ['created_at'] },
-      // Index composés pour requêtes business
-      { fields: ['type', 'status', 'created_at'] },
-      { fields: ['user_id', 'type', 'status'] },
-      { fields: ['association_id', 'type', 'month_year'] },
-      { fields: ['tontine_id', 'type', 'status'] }
-    ]
+    }
   });
 
   return Transaction;

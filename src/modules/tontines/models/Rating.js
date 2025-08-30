@@ -4,52 +4,46 @@ const { Model } = require('sequelize');
 module.exports = (sequelize, DataTypes) => {
   class Rating extends Model {
     static associate(models) {
-      // Une notation appartient à un utilisateur qui note
+      // Un rating est donné par un utilisateur
       Rating.belongsTo(models.User, {
         foreignKey: 'raterUserId',
         as: 'rater'
       });
       
-      // Une notation concerne un utilisateur noté
+      // Un rating est reçu par un utilisateur
       Rating.belongsTo(models.User, {
         foreignKey: 'ratedUserId',
         as: 'ratedUser'
       });
       
-      // Une notation concerne une tontine
+      // Un rating concerne une tontine
       Rating.belongsTo(models.Tontine, {
         foreignKey: 'tontineId',
         as: 'tontine'
       });
       
-      // Une notation peut concerner une participation spécifique
+      // Un rating peut concerner une participation spécifique
       Rating.belongsTo(models.TontineParticipant, {
         foreignKey: 'participantId',
         as: 'participant'
       });
     }
 
-    // Vérifier si notation peut être modifiée
-    canBeModified() {
-      if (this.isLocked) return false;
-      
-      const daysSinceCreated = Math.floor((new Date() - this.createdAt) / (1000 * 60 * 60 * 24));
-      return daysSinceCreated <= 30; // 30 jours pour modifier
-    }
-
-    // Calculer score global de la notation
+    // Calculer score global basé sur les scores individuels
     getOverallScore() {
-      const scores = [];
+      if (this.overallScore) return this.overallScore;
       
-      if (this.punctualityScore !== null) scores.push(this.punctualityScore);
-      if (this.communicationScore !== null) scores.push(this.communicationScore);
-      if (this.reliabilityScore !== null) scores.push(this.reliabilityScore);
-      if (this.collaborationScore !== null) scores.push(this.collaborationScore);
+      // Si pas de score global, calculer moyenne des scores détaillés
+      const scores = [];
+      if (this.punctualityScore) scores.push(this.punctualityScore);
+      if (this.reliabilityScore) scores.push(this.reliabilityScore);
+      if (this.communicationScore) scores.push(this.communicationScore);
+      if (this.organizationScore) scores.push(this.organizationScore);
       
       if (scores.length === 0) return null;
       
       const average = scores.reduce((sum, score) => sum + score, 0) / scores.length;
-      return Math.round(average * 100) / 100;
+      return Math.round(average * 2) / 2; // Arrondir au 0.5 près
     }
 
     // Vérifier si notation est complète
@@ -69,6 +63,41 @@ module.exports = (sequelize, DataTypes) => {
       if (score >= 2.5) return 'average';
       if (score >= 1.5) return 'poor';
       return 'very_poor';
+    }
+
+    // Obtenir badge correspondant
+    getBadge() {
+      const level = this.getRatingLevel();
+      const badges = {
+        'excellent': '⭐⭐⭐⭐⭐',
+        'good': '⭐⭐⭐⭐',
+        'average': '⭐⭐⭐',
+        'poor': '⭐⭐',
+        'very_poor': '⭐',
+        'unrated': '⚪'
+      };
+      
+      return badges[level] || '⚪';
+    }
+
+    // Vérifier si peut être modifiée
+    canBeEdited() {
+      if (this.isLocked) return false;
+      
+      // Limite temps modification (ex: 7 jours après création)
+      const editDeadline = new Date(this.createdAt);
+      editDeadline.setDate(editDeadline.getDate() + 7);
+      
+      return new Date() <= editDeadline;
+    }
+
+    // Formater commentaire pour affichage
+    getFormattedComment() {
+      if (!this.comment) return '';
+      
+      // Limiter longueur affichage
+      if (this.comment.length <= 150) return this.comment;
+      return this.comment.substring(0, 147) + '...';
     }
   }
 
@@ -125,478 +154,324 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.ENUM(
         'participant_to_organizer',    // Participant note organisateur
         'organizer_to_participant',    // Organisateur note participant
-        'participant_to_participant',  // Participant note autre participant
-        'mutual_rating'               // Notation mutuelle
-      ),
-      allowNull: false
-    },
-    
-    context: {
-      type: DataTypes.ENUM(
-        'tontine_completion',         // À la fin de la tontine
-        'monthly_evaluation',         // Évaluation mensuelle
-        'incident_related',          // Suite à un incident
-        'mid_term_review',           // Révision mi-parcours
-        'voluntary'                  // Notation volontaire
+        'participant_to_participant',  // Participant note autre participant (rare)
+        'mutual'                       // Notation mutuelle
       ),
       allowNull: false,
-      defaultValue: 'tontine_completion'
+      comment: 'Type de relation dans la notation'
     },
     
-    // ⭐ SCORES DÉTAILLÉS (0.0 - 5.0)
+    // ⭐ SCORES DÉTAILLÉS (1-5 étoiles)
     overallScore: {
-      type: DataTypes.DECIMAL(3, 2),
+      type: DataTypes.DECIMAL(2, 1),
       allowNull: true,
       validate: {
-        min: 0.00,
-        max: 5.00
+        min: 1.0,
+        max: 5.0
       },
-      comment: 'Note globale générale'
+      comment: 'Note globale (1.0 à 5.0)'
     },
     
     punctualityScore: {
-      type: DataTypes.DECIMAL(3, 2),
+      type: DataTypes.DECIMAL(2, 1),
       allowNull: true,
       validate: {
-        min: 0.00,
-        max: 5.00
+        min: 1.0,
+        max: 5.0
       },
-      comment: 'Ponctualité des paiements/participation'
-    },
-    
-    communicationScore: {
-      type: DataTypes.DECIMAL(3, 2),
-      allowNull: true,
-      validate: {
-        min: 0.00,
-        max: 5.00
-      },
-      comment: 'Qualité de la communication'
+      comment: 'Ponctualité paiements/présence'
     },
     
     reliabilityScore: {
-      type: DataTypes.DECIMAL(3, 2),
+      type: DataTypes.DECIMAL(2, 1),
       allowNull: true,
       validate: {
-        min: 0.00,
-        max: 5.00
+        min: 1.0,
+        max: 5.0
       },
       comment: 'Fiabilité générale'
     },
     
-    collaborationScore: {
-      type: DataTypes.DECIMAL(3, 2),
+    communicationScore: {
+      type: DataTypes.DECIMAL(2, 1),
       allowNull: true,
       validate: {
-        min: 0.00,
-        max: 5.00
+        min: 1.0,
+        max: 5.0
       },
-      comment: 'Esprit de collaboration'
+      comment: 'Qualité communication'
     },
     
+    // 🏛️ SCORES SPÉCIFIQUES ORGANISATEUR
     organizationScore: {
-      type: DataTypes.DECIMAL(3, 2),
+      type: DataTypes.DECIMAL(2, 1),
       allowNull: true,
       validate: {
-        min: 0.00,
-        max: 5.00
+        min: 1.0,
+        max: 5.0
       },
-      comment: 'Capacité d\'organisation (pour organisateurs)'
+      comment: 'Capacité organisation (organisateurs)'
     },
     
     transparencyScore: {
-      type: DataTypes.DECIMAL(3, 2),
+      type: DataTypes.DECIMAL(2, 1),
       allowNull: true,
       validate: {
-        min: 0.00,
-        max: 5.00
+        min: 1.0,
+        max: 5.0
       },
-      comment: 'Transparence financière (pour organisateurs)'
+      comment: 'Transparence gestion (organisateurs)'
     },
     
-    fairnessScore: {
-      type: DataTypes.DECIMAL(3, 2),
+    conflictManagementScore: {
+      type: DataTypes.DECIMAL(2, 1),
       allowNull: true,
       validate: {
-        min: 0.00,
-        max: 5.00
+        min: 1.0,
+        max: 5.0
       },
-      comment: 'Équité dans les décisions'
+      comment: 'Gestion conflits/incidents (organisateurs)'
     },
     
-    // 📝 COMMENTAIRES
-    positiveComment: {
+    // 💬 COMMENTAIRES
+    comment: {
       type: DataTypes.TEXT,
       allowNull: true,
-      validate: {
-        len: [0, 1000]
-      },
-      comment: 'Commentaire positif'
+      comment: 'Commentaire détaillé'
     },
     
-    negativeComment: {
+    privateNotes: {
       type: DataTypes.TEXT,
       allowNull: true,
-      validate: {
-        len: [0, 1000]
-      },
-      comment: 'Points d\'amélioration'
+      comment: 'Notes privées (non visibles par le noté)'
     },
     
-    privateComment: {
-      type: DataTypes.TEXT,
-      allowNull: true,
-      validate: {
-        len: [0, 500]
-      },
-      comment: 'Commentaire privé (admin uniquement)'
-    },
-    
-    // 🏷️ TAGS & CATÉGORIES
-    strengths: {
+    // 🔍 CATÉGORIES DÉTAILLÉES
+    categories: {
       type: DataTypes.JSON,
       allowNull: true,
-      defaultValue: [],
-      comment: 'Points forts identifiés'
+      comment: 'Évaluations par catégories spécifiques'
     },
     
-    weaknesses: {
+    // 🎯 CONTEXTE NOTATION
+    contextTags: {
       type: DataTypes.JSON,
       allowNull: true,
-      defaultValue: [],
-      comment: 'Points faibles identifiés'
+      comment: 'Tags contextuels: ["defaillance", "echange_position", "fin_normale"]'
     },
     
-    recommendedActions: {
-      type: DataTypes.JSON,
-      allowNull: true,
-      defaultValue: [],
-      comment: 'Actions recommandées'
-    },
-    
-    // 📊 ÉVALUATION DÉTAILLÉE
-    criteriaEvaluation: {
-      type: DataTypes.JSON,
-      allowNull: true,
-      comment: 'Évaluation détaillée par critères personnalisés'
-    },
-    
-    behaviorMetrics: {
-      type: DataTypes.JSON,
-      allowNull: true,
-      comment: 'Métriques comportementales (retards, absences, etc.)'
-    },
-    
-    // 🤝 RECOMMANDATION
-    wouldRecommend: {
+    incidentRelated: {
       type: DataTypes.BOOLEAN,
-      allowNull: true,
-      comment: 'Recommanderait cette personne à d\'autres'
+      allowNull: false,
+      defaultValue: false,
+      comment: 'Notation liée à un incident'
     },
     
-    wouldParticipateAgain: {
+    incidentDescription: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      comment: 'Description incident ayant motivé la notation'
+    },
+    
+    // 👁️ VISIBILITÉ & MODÉRATION
+    isPublic: {
       type: DataTypes.BOOLEAN,
-      allowNull: true,
-      comment: 'Participerait à nouveau avec cette personne'
-    },
-    
-    recommendationLevel: {
-      type: DataTypes.ENUM('strongly_recommend', 'recommend', 'neutral', 'not_recommend', 'strongly_against'),
-      allowNull: true
-    },
-    
-    // 📅 PÉRIODE ÉVALUÉE
-    evaluationPeriodStart: {
-      type: DataTypes.DATE,
-      allowNull: true,
-      comment: 'Début de la période évaluée'
-    },
-    
-    evaluationPeriodEnd: {
-      type: DataTypes.DATE,
-      allowNull: true,
-      comment: 'Fin de la période évaluée'
-    },
-    
-    // 🔒 STATUT & VISIBILITÉ
-    status: {
-      type: DataTypes.ENUM('draft', 'submitted', 'published', 'disputed', 'archived'),
       allowNull: false,
-      defaultValue: 'draft'
-    },
-    
-    visibility: {
-      type: DataTypes.ENUM('private', 'tontine_members', 'public', 'platform_admin'),
-      allowNull: false,
-      defaultValue: 'tontine_members'
+      defaultValue: true,
+      comment: 'Notation visible publiquement'
     },
     
     isAnonymous: {
       type: DataTypes.BOOLEAN,
+      allowNull: false,
       defaultValue: false,
-      comment: 'Notation anonyme'
+      comment: 'Notation anonyme (masquer identité noteur)'
+    },
+    
+    // 🔒 STATUT & CONTRÔLE
+    status: {
+      type: DataTypes.ENUM('draft', 'published', 'disputed', 'moderated', 'archived'),
+      allowNull: false,
+      defaultValue: 'draft',
+      comment: 'Statut de la notation'
     },
     
     isLocked: {
       type: DataTypes.BOOLEAN,
+      allowNull: false,
       defaultValue: false,
-      comment: 'Verrouillée contre modifications'
+      comment: 'Notation verrouillée (non modifiable)'
     },
     
-    // 🚨 INCIDENTS & LITIGES
-    hasIncidents: {
+    // 🔄 RÉPONSE DU NOTÉ
+    hasResponse: {
       type: DataTypes.BOOLEAN,
-      defaultValue: false
+      allowNull: false,
+      defaultValue: false,
+      comment: 'Le noté a répondu'
     },
     
-    incidentDetails: {
-      type: DataTypes.JSON,
+    responseComment: {
+      type: DataTypes.TEXT,
       allowNull: true,
-      comment: 'Détails des incidents rapportés'
+      comment: 'Réponse du noté'
     },
     
-    isDisputed: {
-      type: DataTypes.BOOLEAN,
-      defaultValue: false
-    },
-    
-    disputeReason: {
-      type: DataTypes.TEXT,
-      allowNull: true
-    },
-    
-    disputeResolution: {
-      type: DataTypes.TEXT,
-      allowNull: true
+    responseDate: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      comment: 'Date réponse du noté'
     },
     
     // ⚖️ MODÉRATION
-    flaggedForReview: {
+    isDisputed: {
       type: DataTypes.BOOLEAN,
-      defaultValue: false
+      allowNull: false,
+      defaultValue: false,
+      comment: 'Notation contestée'
     },
     
-    moderationNotes: {
-      type: DataTypes.TEXT,
+    disputeReason: {
+      type: DataTypes.STRING(255),
       allowNull: true,
-      comment: 'Notes équipe modération'
+      comment: 'Motif contestation'
     },
     
-    reviewedAt: {
-      type: DataTypes.DATE,
-      allowNull: true
-    },
-    
-    reviewedBy: {
+    moderatedBy: {
       type: DataTypes.INTEGER,
       allowNull: true,
       references: {
         model: 'users',
         key: 'id'
-      }
+      },
+      comment: 'Modérateur ayant traité'
     },
     
-    // 📈 IMPACT
-    impactOnReputation: {
-      type: DataTypes.DECIMAL(4, 2),
+    moderationNotes: {
+      type: DataTypes.TEXT,
       allowNull: true,
-      comment: 'Impact calculé sur réputation (-10.00 à +10.00)'
+      comment: 'Notes modération'
     },
     
-    weightFactor: {
-      type: DataTypes.DECIMAL(3, 2),
-      defaultValue: 1.00,
-      comment: 'Poids de cette notation (0.1 à 2.0)'
+    // 📊 UTILITÉ & ENGAGEMENT
+    helpfulVotes: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 0,
+      comment: 'Votes "utile" sur cette notation'
     },
     
-    // 🔄 SUIVI
-    hasFollowUp: {
-      type: DataTypes.BOOLEAN,
-      defaultValue: false
+    reportedCount: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 0,
+      comment: 'Nombre signalements'
     },
     
-    followUpDate: {
+    // 📅 DATES IMPORTANTES
+    ratingPeriodStart: {
       type: DataTypes.DATE,
-      allowNull: true
+      allowNull: true,
+      comment: 'Début période évaluée'
     },
     
-    followUpActions: {
+    ratingPeriodEnd: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      comment: 'Fin période évaluée'
+    },
+    
+    publishedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      comment: 'Date publication notation'
+    },
+    
+    // 🔍 MÉTADONNÉES
+    source: {
+      type: DataTypes.ENUM('manual', 'automatic', 'imported'),
+      allowNull: false,
+      defaultValue: 'manual',
+      comment: 'Source de la notation'
+    },
+    
+    deviceInfo: {
       type: DataTypes.JSON,
-      allowNull: true
+      allowNull: true,
+      comment: 'Info appareil (debugging)'
     },
     
-    // 📱 TECHNICAL METADATA
-   deviceInfo: {
-     type: DataTypes.JSON,
-     allowNull: true,
-     comment: 'Device utilisé pour la notation'
-   },
-   
-   ipAddress: {
-     type: DataTypes.STRING,
-     allowNull: true
-   },
-   
-   userAgent: {
-     type: DataTypes.TEXT,
-     allowNull: true
-   },
-   
-   // 📊 ANALYTICS
-   viewCount: {
-     type: DataTypes.INTEGER,
-     defaultValue: 0,
-     comment: 'Nombre de fois consultée'
-   },
-   
-   helpfulVotes: {
-     type: DataTypes.INTEGER,
-     defaultValue: 0,
-     comment: 'Votes "utile" reçus'
-   },
-   
-   // ⏰ TIMING
-   submittedAt: {
-     type: DataTypes.DATE,
-     allowNull: true
-   },
-   
-   publishedAt: {
-     type: DataTypes.DATE,
-     allowNull: true
-   },
-   
-   lastModifiedAt: {
-     type: DataTypes.DATE,
-     allowNull: true
-   },
-   
-   expiresAt: {
-     type: DataTypes.DATE,
-     allowNull: true,
-     comment: 'Date expiration de la notation'
-   }
-   
- }, {
-   sequelize,
-   modelName: 'Rating',
-   tableName: 'ratings',
-   underscored: true,
-   timestamps: true,
-   paranoid: true, // Soft delete
-   
-   hooks: {
-     beforeCreate: (rating) => {
-       // Calculer score global automatiquement
-       if (!rating.overallScore) {
-         rating.overallScore = rating.getOverallScore();
-       }
-       
-       // Date de soumission
-       if (rating.status === 'submitted' && !rating.submittedAt) {
-         rating.submittedAt = new Date();
-       }
-       
-       // Calculer impact sur réputation
-       if (rating.overallScore) {
-         const impact = (rating.overallScore - 2.5) * 2; // Scale -5 to +5
-         rating.impactOnReputation = Math.round(impact * 100) / 100;
-       }
-     },
-     
-     beforeUpdate: (rating) => {
-       // Recalculer score global si scores individuels changent
-       const scoreFields = ['punctualityScore', 'communicationScore', 'reliabilityScore', 'collaborationScore'];
-       if (scoreFields.some(field => rating.changed(field))) {
-         rating.overallScore = rating.getOverallScore();
-       }
-       
-       // Date de soumission
-       if (rating.changed('status') && rating.status === 'submitted' && !rating.submittedAt) {
-         rating.submittedAt = new Date();
-       }
-       
-       // Date de publication
-       if (rating.changed('status') && rating.status === 'published' && !rating.publishedAt) {
-         rating.publishedAt = new Date();
-       }
-       
-       // Date dernière modification
-       rating.lastModifiedAt = new Date();
-       
-       // Verrouiller automatiquement après publication
-       if (rating.changed('status') && rating.status === 'published') {
-         rating.isLocked = true;
-       }
-     },
-     
-     afterCreate: async (rating) => {
-       console.log(`⭐ Nouvelle notation: ${rating.raterUserId} → ${rating.ratedUserId} (Tontine ${rating.tontineId})`);
-       
-       // Mettre à jour score réputation utilisateur noté
-       const ratedUser = await rating.getRatedUser();
-       if (ratedUser && rating.overallScore) {
-         // TODO: Recalculer moyenne réputation tontines
-       }
-     },
-     
-     afterUpdate: async (rating) => {
-       // Recalculer réputation si score modifié
-       if (rating.changed('overallScore') && rating.status === 'published') {
-         const ratedUser = await rating.getRatedUser();
-         if (ratedUser) {
-           console.log(`📊 Mise à jour réputation User ${ratedUser.id}`);
-           // TODO: Recalculer score réputation
-         }
-       }
-       
-       // Log si notation contestée
-       if (rating.changed('isDisputed') && rating.isDisputed) {
-         console.log(`🚨 Notation contestée: Rating ${rating.id} - Raison: ${rating.disputeReason}`);
-       }
-     }
-   },
-   
-   indexes: [
-     { fields: ['rater_user_id'] },
-     { fields: ['rated_user_id'] },
-     { fields: ['tontine_id'] },
-     { fields: ['participant_id'] },
-     { fields: ['rating_type'] },
-     { fields: ['status'] },
-     { fields: ['overall_score'] },
-     { fields: ['is_disputed'] },
-     { fields: ['flagged_for_review'] },
-     { fields: ['submitted_at'] },
-     { fields: ['published_at'] },
-     // Index composé pour éviter doublons
-     { fields: ['rater_user_id', 'rated_user_id', 'tontine_id'], unique: true },
-     // Index pour recherche notations utilisateur
-     { fields: ['rated_user_id', 'status', 'published_at'] },
-     { fields: ['tontine_id', 'rating_type', 'status'] }
-   ],
-   
-   validate: {
-     // Validation: ne peut pas se noter soi-même
-     cannotSelfRate() {
-       if (this.raterUserId === this.ratedUserId) {
-         throw new Error('Un utilisateur ne peut pas se noter lui-même');
-       }
-     },
-     
-     // Validation: scores cohérents
-     scoresConsistency() {
-       const scores = [this.punctualityScore, this.communicationScore, this.reliabilityScore, this.collaborationScore].filter(s => s !== null);
-       if (scores.length > 0 && this.overallScore) {
-         const calculatedAverage = scores.reduce((sum, score) => sum + score, 0) / scores.length;
-         const difference = Math.abs(calculatedAverage - this.overallScore);
-         if (difference > 1.0) {
-           throw new Error('Le score global doit être cohérent avec les scores détaillés');
-         }
-       }
-     }
-   }
- });
+    metadata: {
+      type: DataTypes.JSON,
+      allowNull: true,
+      comment: 'Métadonnées additionnelles'
+    }
+  }, {
+    sequelize,
+    modelName: 'Rating',
+    tableName: 'ratings',
+    underscored: true,
+    timestamps: true,
+    
+    indexes: [
+      {
+        fields: ['rater_user_id']
+      },
+      {
+        fields: ['rated_user_id']
+      },
+      {
+        fields: ['tontine_id']
+      },
+      {
+        fields: ['rating_type']
+      },
+      {
+        fields: ['overall_score']
+      },
+      {
+        fields: ['status']
+      },
+      {
+        fields: ['is_public']
+      },
+      {
+        fields: ['published_at']
+      },
+      {
+        unique: true,
+        fields: ['rater_user_id', 'rated_user_id', 'tontine_id'],
+        name: 'unique_rating_per_tontine'
+      }
+    ],
+    
+    // Validation métier
+    validate: {
+      // Au moins un score doit être fourni
+      hasAtLeastOneScore() {
+        if (!this.overallScore && !this.punctualityScore && !this.reliabilityScore) {
+          throw new Error('Au moins un score doit être fourni');
+        }
+      },
+      
+      // Pas d'auto-notation
+      noSelfRating() {
+        if (this.raterUserId === this.ratedUserId) {
+          throw new Error('Impossible de se noter soi-même');
+        }
+      },
+      
+      // Scores organisateur uniquement pour type approprié
+      organizerScoresValidation() {
+        const isOrganizerRating = this.ratingType === 'participant_to_organizer';
+        const hasOrganizerScores = this.organizationScore || this.transparencyScore || this.conflictManagementScore;
+        
+        if (hasOrganizerScores && !isOrganizerRating) {
+          throw new Error('Scores organisateur réservés aux notations d\'organisateurs');
+        }
+      }
+    }
+  });
 
- return Rating;
+  return Rating;
 };

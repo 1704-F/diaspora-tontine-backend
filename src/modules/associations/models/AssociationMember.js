@@ -22,52 +22,101 @@ module.exports = (sequelize, DataTypes) => {
         as: 'section'
       });
       
-      // Un membre a plusieurs transactions
+      // Un membre a plusieurs transactions (cotisations, aides)
       AssociationMember.hasMany(models.Transaction, {
-        foreignKey: 'membershipId',
+        foreignKey: 'memberId',
         as: 'transactions'
       });
     }
 
-    // Calculer l'ancienneté en mois
-    getAnciennetyMonths() {
-      const joinDate = this.joinDate || this.createdAt;
-      const now = new Date();
-      const diffTime = Math.abs(now - joinDate);
-      const diffMonths = Math.ceil(diffTime / (1000 * 60 * 60 * 24 * 30.44)); // 30.44 jours/mois en moyenne
-      return diffMonths;
+    // Calculer ancienneté totale (import + app)
+    getTotalSeniority() {
+      const imported = this.ancienneteImported || 0; // En mois
+      const app = this.getAppSeniority(); // En mois
+      return imported + app;
     }
 
-    // Vérifier si à jour des cotisations
-    async isUpToDate() {
-      if (this.memberType === 'non_actif') return true;
-      
-      const currentMonth = new Date().getMonth();
-      const currentYear = new Date().getFullYear();
-      
+    // Calculer ancienneté dans l'app
+    getAppSeniority() {
+      if (!this.joinDate) return 0;
+      const now = new Date();
+      const join = new Date(this.joinDate);
+      const diffTime = Math.abs(now - join);
+      return Math.floor(diffTime / (1000 * 60 * 60 * 24 * 30)); // Mois
+    }
+
+    // Vérifier si cotisation à jour ce mois
+    async isCurrentMonthPaid() {
       const { Transaction } = sequelize.models;
-      const lastPayment = await Transaction.findOne({
+      const startOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+      const endOfMonth = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0);
+      
+      const payment = await Transaction.findOne({
         where: { 
-          membershipId: this.id,
-          type: 'cotisation'
-        },
-        order: [['createdAt', 'DESC']]
+          memberId: this.id,
+          type: 'cotisation',
+          status: 'completed',
+          createdAt: {
+            [sequelize.Sequelize.Op.between]: [startOfMonth, endOfMonth]
+          }
+        }
       });
       
-      if (!lastPayment) return false;
-      
-      const paymentMonth = lastPayment.createdAt.getMonth();
-      const paymentYear = lastPayment.createdAt.getFullYear();
-      
-      return paymentYear === currentYear && paymentMonth >= currentMonth - 1;
+      return !!payment;
     }
 
-    // Calculer montant cotisation selon type
-    getMonthlyCotisation() {
-      if (this.memberType === 'non_actif') return 0;
+    // Calculer total cotisations versées
+    async getTotalContributions() {
+      const { Transaction } = sequelize.models;
+      const result = await Transaction.findOne({
+        where: { 
+          memberId: this.id,
+          type: 'cotisation',
+          status: 'completed'
+        },
+        attributes: [
+          [sequelize.fn('SUM', sequelize.col('amount')), 'total']
+        ],
+        raw: true
+      });
+      return parseFloat(result?.total || 0);
+    }
+
+    // Calculer total aides reçues
+    async getTotalAidsReceived() {
+      const { Transaction } = sequelize.models;
+      const result = await Transaction.findOne({
+        where: { 
+          memberId: this.id,
+          type: 'aide',
+          status: 'completed'
+        },
+        attributes: [
+          [sequelize.fn('SUM', sequelize.col('amount')), 'total']
+        ],
+        raw: true
+      });
+      return parseFloat(result?.total || 0);
+    }
+
+    // Vérifier éligibilité aide selon règles
+    isEligibleForAid(aidAmount) {
+      if (this.status !== 'active') return false;
       
-      const rates = this.customRates || {};
-      return rates[this.memberType] || 0;
+      const settings = this.association?.settings || {};
+      const aidRules = settings.aidRules || {};
+      
+      // Vérifier ancienneté minimum
+      if (aidRules.minSeniority && this.getTotalSeniority() < aidRules.minSeniority) {
+        return false;
+      }
+      
+      // Vérifier cotisations à jour
+      if (aidRules.requireCurrentPayments && !this.isCurrentMonthPaid()) {
+        return false;
+      }
+      
+      return true;
     }
   }
 
@@ -78,14 +127,15 @@ module.exports = (sequelize, DataTypes) => {
       autoIncrement: true
     },
     
-    // 🔗 RELATIONS
+    // 🔗 RELATIONS PRINCIPALES
     userId: {
       type: DataTypes.INTEGER,
       allowNull: false,
       references: {
         model: 'users',
         key: 'id'
-      }
+      },
+      comment: 'Utilisateur membre'
     },
     
     associationId: {
@@ -94,380 +144,204 @@ module.exports = (sequelize, DataTypes) => {
       references: {
         model: 'associations',
         key: 'id'
-      }
+      },
+      comment: 'Association dont il est membre'
     },
     
     sectionId: {
       type: DataTypes.INTEGER,
-      allowNull: true,
+      allowNull: true, // Null pour associations simples
       references: {
         model: 'sections',
         key: 'id'
       },
-      comment: 'NULL pour associations mono-géographiques'
+      comment: 'Section géographique (optionnel)'
     },
     
-    // 👤 INFORMATIONS MEMBRE
-    memberNumber: {
-      type: DataTypes.STRING,
-      allowNull: true,
-      comment: 'Numéro membre unique dans l\'association'
-    },
-    
+    // 🏷️ TYPE & STATUT MEMBRE (CONFIGURABLE)
     memberType: {
-      type: DataTypes.STRING,
+      type: DataTypes.STRING(50),
       allowNull: false,
-      defaultValue: 'cdi',
-      comment: 'Type configurable: etudiant, cdi, cdd, non_actif, retraite, etc.'
+      comment: 'Type membre configurable par association (ex: "actif", "fondateur", "ancien")'
+    },
+    
+    status: {
+      type: DataTypes.ENUM('pending', 'active', 'suspended', 'excluded', 'inactive'),
+      allowNull: false,
+      defaultValue: 'pending',
+      comment: 'Statut actuel du membre'
     },
     
     // 📅 DATES IMPORTANTES
     joinDate: {
       type: DataTypes.DATE,
       allowNull: false,
-      defaultValue: DataTypes.NOW
+      defaultValue: DataTypes.NOW,
+      comment: 'Date d\'adhésion à l\'association'
     },
     
-    validatedAt: {
+    approvedDate: {
       type: DataTypes.DATE,
       allowNull: true,
-      comment: 'Date validation par le bureau'
+      comment: 'Date d\'approbation par le bureau'
     },
     
-    validatedBy: {
+    approvedBy: {
       type: DataTypes.INTEGER,
       allowNull: true,
-      comment: 'ID du membre du bureau qui a validé'
+      references: {
+        model: 'users',
+        key: 'id'
+      },
+      comment: 'Membre bureau qui a approuvé'
     },
     
-    // 📊 STATUT MEMBRE
-    status: {
-      type: DataTypes.ENUM(
-        'pending',        // En attente validation
-        'active',         // Actif
-        'inactive',       // Inactif (retard cotisations)
-        'suspended',      // Suspendu temporairement
-        'excluded',       // Exclu définitivement
-        'departed',       // Parti (déménagement, etc.)
-        'deceased'        // Décédé
-      ),
+    // ⏰ ANCIENNETÉ (DIFFÉRENCIATEUR CLÉ)
+    ancienneteImported: {
+      type: DataTypes.INTEGER,
       allowNull: false,
-      defaultValue: 'pending'
+      defaultValue: 0,
+      comment: 'Ancienneté avant app (mois) - import historique'
     },
     
-    statusReason: {
-      type: DataTypes.TEXT,
-      allowNull: true,
-      comment: 'Raison du statut (exclusion, suspension, etc.)'
-    },
-    
-    lastStatusChange: {
-      type: DataTypes.DATE,
-      allowNull: true
-    },
-    
-    // 💰 COTISATIONS
-    monthlyContribution: {
-      type: DataTypes.DECIMAL(6, 2),
-      allowNull: false,
-      defaultValue: 0.00,
-      comment: 'Montant cotisation mensuelle selon type membre'
-    },
-    
-    customRates: {
+    // 🎯 RÔLES & PERMISSIONS
+    roles: {
       type: DataTypes.JSON,
       allowNull: true,
-      comment: 'Taux personnalisés si différents des taux section/association'
-    },
-    
-    lastCotisationDate: {
-      type: DataTypes.DATE,
-      allowNull: true
-    },
-    
-    cotisationStatus: {
-      type: DataTypes.ENUM('up_to_date', 'late', 'very_late', 'defaulted'),
-      allowNull: false,
-      defaultValue: 'up_to_date'
-    },
-    
-    monthsBehind: {
-      type: DataTypes.INTEGER,
-      defaultValue: 0,
-      comment: 'Nombre de mois de retard'
-    },
-    
-    totalOwed: {
-      type: DataTypes.DECIMAL(8, 2),
-      defaultValue: 0.00,
-      comment: 'Montant total dû'
-    },
-    
-    // 🎯 ROLES & PERMISSIONS
-    role: {
-      type: DataTypes.ENUM(
-        'member',           // Membre simple
-        'active_member',    // Membre actif (votes)
-        'delegate',         // Délégué section
-        'board_member',     // Membre bureau section
-        'treasurer',        // Trésorier section
-        'secretary',        // Secrétaire section
-        'president',        // Président section
-        'central_board',    // Bureau central
-        'founder'           // Membre fondateur
-      ),
-      allowNull: false,
-      defaultValue: 'member'
+      comment: 'Rôles dans association/section (configurable JSON)'
     },
     
     permissions: {
       type: DataTypes.JSON,
       allowNull: true,
-      defaultValue: {
-        canVote: false,
-        canViewFinances: false,
-        canManageMembers: false,
-        canOrganizeEvents: false,
-        canApproveAids: false
-      }
+      comment: 'Permissions spécifiques (transparence configurable)'
     },
     
-    // 🏆 ENGAGEMENT & PARTICIPATION
-    attendanceRate: {
-      type: DataTypes.DECIMAL(5, 2),
-      defaultValue: 0.00,
-      comment: 'Taux présence événements (%)'
+    // 💰 CONFIGURATION COTISATIONS
+    cotisationAmount: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: true,
+      comment: 'Montant cotisation personnalisée (si différent du type)'
     },
     
-    eventsAttended: {
-      type: DataTypes.INTEGER,
-      defaultValue: 0
-    },
-    
-    volunteerHours: {
-      type: DataTypes.INTEGER,
-      defaultValue: 0
-    },
-    
-    // 💝 AIDES REÇUES/DONNÉES
-    totalAidsReceived: {
-      type: DataTypes.DECIMAL(8, 2),
-      defaultValue: 0.00
-    },
-    
-    aidsReceivedCount: {
-      type: DataTypes.INTEGER,
-      defaultValue: 0
-    },
-    
-    lastAidDate: {
-      type: DataTypes.DATE,
-      allowNull: true
-    },
-    
-    // 📱 PREFERENCES COMMUNICATION
-    preferredContactMethod: {
-      type: DataTypes.ENUM('sms', 'email', 'whatsapp', 'phone', 'postal'),
+    autoPaymentEnabled: {
+      type: DataTypes.BOOLEAN,
       allowNull: false,
-      defaultValue: 'sms'
+      defaultValue: false,
+      comment: 'Prélèvement automatique activé'
     },
     
-    notificationSettings: {
-      type: DataTypes.JSON,
-      allowNull: false,
-      defaultValue: {
-        cotisationReminders: true,
-        eventNotifications: true,
-        aidApprovals: true,
-        generalAnnouncements: true
-      }
-    },
-    
-    // 🔄 TRANSFERTS
-    transferHistory: {
-      type: DataTypes.JSON,
+    paymentMethod: {
+      type: DataTypes.STRING(20),
       allowNull: true,
-      defaultValue: [],
-      comment: 'Historique transferts entre sections'
+      comment: 'Méthode paiement préférée (card, iban)'
     },
     
-    transferredFrom: {
-      type: DataTypes.INTEGER,
+    paymentMethodId: {
+      type: DataTypes.STRING(255),
       allowNull: true,
-      references: {
-        model: 'sections',
-        key: 'id'
-      }
+      comment: 'ID méthode paiement (Stripe/Square)'
     },
     
-    transferDate: {
-      type: DataTypes.DATE,
-      allowNull: true
-    },
-    
-    // 👨‍👩‍👧‍👦 FAMILLE & PARRAINAGE
-    sponsor: {
-      type: DataTypes.INTEGER,
-      allowNull: true,
-      references: {
-        model: 'association_members',
-        key: 'id'
-      },
-      comment: 'Membre qui a parrainé'
-    },
-    
-    familyMembers: {
-      type: DataTypes.JSON,
-      allowNull: true,
-      defaultValue: [],
-      comment: 'Autres membres famille dans association'
-    },
-    
-    emergencyContact: {
-      type: DataTypes.JSON,
-      allowNull: true,
-      comment: 'Contact urgence: nom, téléphone, relation'
-    },
-    
-    // 📊 STATISTIQUES FINANCIERES
+    // 📊 STATISTIQUES FINANCIÈRES
     totalContributed: {
       type: DataTypes.DECIMAL(10, 2),
-      defaultValue: 0.00
+      allowNull: false,
+      defaultValue: 0.00,
+      comment: 'Total cotisations versées (mis à jour automatiquement)'
     },
     
-    averageMonthlyPayment: {
-      type: DataTypes.DECIMAL(6, 2),
-      defaultValue: 0.00
+    totalAidsReceived: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: false,
+      defaultValue: 0.00,
+      comment: 'Total aides reçues (mis à jour automatiquement)'
     },
     
-    paymentReliabilityScore: {
-      type: DataTypes.DECIMAL(3, 2),
-      defaultValue: 5.00,
-      validate: {
-        min: 0.00,
-        max: 5.00
-      },
-      comment: 'Score fiabilité paiements (0-5)'
+    lastContributionDate: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      comment: 'Date dernière cotisation'
     },
     
-    // 📝 NOTES & COMMENTAIRES
+    contributionStatus: {
+      type: DataTypes.ENUM('uptodate', 'late', 'very_late'),
+      allowNull: false,
+      defaultValue: 'uptodate',
+      comment: 'Statut cotisations'
+    },
+    
+    // 📋 INFORMATIONS ADDITIONNELLES
     notes: {
       type: DataTypes.TEXT,
       allowNull: true,
-      comment: 'Notes privées bureau sur le membre'
+      comment: 'Notes internes bureau association'
     },
     
-    publicProfile: {
+    socialProfileVisible: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: true,
+      comment: 'Profil visible autres membres'
+    },
+    
+    // 📱 PREFERENCES COMMUNICATION
+    notificationPreferences: {
       type: DataTypes.JSON,
       allowNull: true,
-      comment: 'Infos publiques visibles autres membres'
+      comment: 'Préférences notifications (SMS, email, push)'
     },
     
-    // ⚙️ METADATA
-    dataImported: {
-      type: DataTypes.BOOLEAN,
-      defaultValue: false,
-      comment: 'Données importées historique ou saisie manuelle'
-    },
-    
-    importedFromSystem: {
-      type: DataTypes.STRING,
+    // 🔄 HISTORIQUE TRANSFERTS
+    transferHistory: {
+      type: DataTypes.JSON,
       allowNull: true,
-      comment: 'Système origine si importé'
+      comment: 'Historique transferts inter-sections'
     },
     
-    lastActivityAt: {
+    // 📅 DATES AUDIT
+    lastActiveDate: {
       type: DataTypes.DATE,
-      allowNull: true
-    }
+      allowNull: true,
+      comment: 'Dernière activité dans association'
+    },
     
+    suspensionReason: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+      comment: 'Raison suspension/exclusion'
+    }
   }, {
     sequelize,
     modelName: 'AssociationMember',
     tableName: 'association_members',
     underscored: true,
     timestamps: true,
-    paranoid: true, // Soft delete
-    
-    hooks: {
-      beforeCreate: (member) => {
-        // Générer numéro membre automatiquement
-        if (!member.memberNumber) {
-          const year = new Date().getFullYear().toString().slice(-2);
-          const timestamp = Date.now().toString().slice(-6);
-          member.memberNumber = `M${year}${timestamp}`;
-        }
-        
-        // Date de dernière activité
-        member.lastActivityAt = new Date();
-      },
-      
-      beforeUpdate: (member) => {
-        // Mettre à jour date dernière activité
-        member.lastActivityAt = new Date();
-        
-        // Mettre à jour date changement statut
-        if (member.changed('status')) {
-          member.lastStatusChange = new Date();
-        }
-      },
-      
-      afterCreate: async (member) => {
-        console.log(`👤 Nouveau membre: ${member.memberNumber} (Association ID: ${member.associationId})`);
-        
-        // Mettre à jour compteur membres association
-        const association = await member.getAssociation();
-        if (association) {
-          await association.increment('totalMembers');
-          if (member.status === 'active') {
-            await association.increment('activeMembers');
-          }
-        }
-        
-        // Mettre à jour compteur section si applicable
-        if (member.sectionId) {
-          const section = await member.getSection();
-          if (section) {
-            await section.increment('totalMembers');
-            if (member.status === 'active') {
-              await section.increment('activeMembers');
-            }
-          }
-        }
-      },
-      
-      afterUpdate: async (member) => {
-        // Mettre à jour compteurs si changement statut
-        if (member.changed('status')) {
-          const association = await member.getAssociation();
-          const section = member.sectionId ? await member.getSection() : null;
-          
-          if (member.status === 'active' && member._previousDataValues.status !== 'active') {
-            // Nouveau membre actif
-            if (association) await association.increment('activeMembers');
-            if (section) await section.increment('activeMembers');
-          } else if (member.status !== 'active' && member._previousDataValues.status === 'active') {
-            // Plus membre actif
-            if (association) await association.decrement('activeMembers');
-            if (section) await section.decrement('activeMembers');
-          }
-        }
-      }
-    },
     
     indexes: [
-      { fields: ['user_id'] },
-      { fields: ['association_id'] },
-      { fields: ['section_id'] },
-      { fields: ['member_number'], unique: true },
-      { fields: ['status'] },
-      { fields: ['member_type'] },
-      { fields: ['role'] },
-      { fields: ['cotisation_status'] },
-      { fields: ['join_date'] },
-      { fields: ['last_cotisation_date'] },
-      // Index composé pour éviter doublons user/association
-      { fields: ['user_id', 'association_id'], unique: true }
+      {
+        fields: ['user_id']
+      },
+      {
+        fields: ['association_id']
+      },
+      {
+        fields: ['section_id']
+      },
+      {
+        fields: ['status']
+      },
+      {
+        fields: ['member_type']
+      },
+      {
+        unique: true,
+        fields: ['user_id', 'association_id'],
+        name: 'unique_user_per_association'
+      },
+      {
+        fields: ['contribution_status']
+      }
     ]
   });
 
