@@ -1,5 +1,6 @@
 //src/modules/association/routes/associationRoutes.js
 const express = require('express');
+const multer = require('multer');
 const { authenticate, requireAssociationPermission } = require('../../../core/auth/middleware/auth');
 const { 
   validateCreateAssociation,
@@ -9,6 +10,31 @@ const {
   validateAssociationId
 } = require('../../../core/middleware/validation');
 const { associationController, sectionController, memberController } = require('../controllers');
+
+
+
+// Configuration multer pour upload de fichiers
+const upload = multer({
+  dest: 'uploads/documents/', // Dossier temporaire
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB max
+  },
+  fileFilter: (req, file, cb) => {
+    // Types de fichiers autorisés
+    const allowedTypes = [
+      'application/pdf',
+      'image/jpeg', 
+      'image/png',
+      'image/jpg'
+    ];
+    
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Type de fichier non autorisé'), false);
+    }
+  }
+});
 
 const router = express.Router();
 
@@ -263,5 +289,29 @@ router.use((error, req, res, next) => {
     message: process.env.NODE_ENV === 'development' ? error.message : 'Une erreur est survenue'
   });
 });
+
+// Upload document KYB
+router.post('/:id/documents',
+  authenticate,
+  upload.single('document'), // Middleware multer
+  requireAssociationPermission('id', 'admin'),
+  associationController.uploadDocument
+);
+
+// Lister documents association
+router.get('/:id/documents',
+  authenticate,
+  requireAssociationPermission('id', 'member'),
+  associationController.getDocuments
+);
+
+// Télécharger document spécifique
+router.get('/:id/documents/:documentId',
+  authenticate,
+  requireAssociationPermission('id', 'member'),
+  associationController.downloadDocument
+);
+
+
 
 module.exports = router;

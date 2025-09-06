@@ -776,6 +776,102 @@ class AssociationController {
       throw error;
     }
   }
+
+   // 📁 UPLOAD DOCUMENT KYB
+  async uploadDocument(req, res) {
+    try {
+      const { id: associationId } = req.params;
+      const { type } = req.body;
+      const file = req.file;
+
+      if (!file) {
+        return res.status(400).json({
+          error: 'Aucun fichier fourni',
+          code: 'NO_FILE_PROVIDED'
+        });
+      }
+
+      // Vérifier que l'association existe
+      const association = await Association.findByPk(associationId);
+      if (!association) {
+        return res.status(404).json({
+          error: 'Association introuvable',
+          code: 'ASSOCIATION_NOT_FOUND'
+        });
+      }
+
+      // TODO: Upload vers Cloudinary ou S3
+      // Pour l'instant, stockage temporaire local
+      const fileUrl = `uploads/documents/${file.filename}`;
+
+      // Créer document en DB
+      const { Document } = require('../../../models');
+      const document = await Document.create({
+        userId: req.user.id,
+        associationId: associationId,
+        type: type,
+        title: `Document ${type}`,
+        fileName: file.originalname,
+        fileUrl: fileUrl,
+        fileSize: file.size,
+        mimeType: file.mimetype,
+        status: 'pending',
+        uploadedFrom: 'web'
+      });
+
+      res.json({
+        success: true,
+        message: 'Document uploadé avec succès',
+        data: {
+          document: {
+            id: document.id,
+            type: document.type,
+            fileName: document.fileName,
+            status: document.status
+          }
+        }
+      });
+
+    } catch (error) {
+      console.error('Erreur upload document:', error);
+      res.status(500).json({
+        error: 'Erreur upload document',
+        code: 'DOCUMENT_UPLOAD_ERROR',
+        details: error.message
+      });
+    }
+  }
+
+  // 📄 LISTER DOCUMENTS ASSOCIATION
+  async getDocuments(req, res) {
+    try {
+      const { id: associationId } = req.params;
+
+      const { Document } = require('../../../models');
+      const documents = await Document.findAll({
+        where: {
+          associationId: associationId
+        },
+        attributes: ['id', 'type', 'title', 'fileName', 'status', 'createdAt'],
+        order: [['createdAt', 'DESC']]
+      });
+
+      res.json({
+        success: true,
+        data: { documents }
+      });
+
+    } catch (error) {
+      console.error('Erreur récupération documents:', error);
+      res.status(500).json({
+        error: 'Erreur récupération documents',
+        code: 'DOCUMENTS_FETCH_ERROR'
+      });
+    }
+  }
+
+
+
 }
 
 module.exports = new AssociationController();
