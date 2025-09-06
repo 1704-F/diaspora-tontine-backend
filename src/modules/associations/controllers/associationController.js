@@ -1,3 +1,4 @@
+//src/modules/association/controllers/associationController.js
 const {
   Association,
   AssociationMember,
@@ -6,6 +7,52 @@ const {
   Transaction,
 } = require("../../../models");
 const { Op } = require("sequelize");
+
+// Fonction utilitaire pour vérifier permissions (flexible par association)
+function checkPermission(membership, action) {
+  if (!membership || !membership.association) return false;
+
+  const permissions = membership.association.permissionsMatrix || {};
+  const actionConfig = permissions[action];
+
+  if (!actionConfig) return false;
+
+  const userRoles = membership.roles || [];
+  const allowedRoles = actionConfig.allowed_roles || [];
+
+  return userRoles.some((role) => allowedRoles.includes(role));
+}
+
+// Fonction utilitaire pour calculer permissions utilisateur
+async function getUserPermissions(userId, associationId) {
+  try {
+    const membership = await AssociationMember.findOne({
+      where: { userId, associationId, status: "active" },
+      include: [{ model: Association, as: "association" }],
+    });
+
+    if (!membership) return {};
+
+    const permissionsMatrix = membership.association.permissionsMatrix || {};
+    const userRoles = membership.roles || [];
+    const userPermissions = {};
+
+    // Calculer permissions effectives
+    Object.keys(permissionsMatrix).forEach((action) => {
+      const config = permissionsMatrix[action];
+      const allowedRoles = config.allowed_roles || [];
+      userPermissions[action] = userRoles.some((role) =>
+        allowedRoles.includes(role)
+      );
+    });
+
+    return userPermissions;
+  } catch (error) {
+    console.error("Erreur calcul permissions:", error);
+    return {};
+  }
+}
+
 
 class AssociationController {
   // 🏛️ CRÉER ASSOCIATION (avec KYB)
@@ -204,10 +251,7 @@ class AssociationController {
 
       // Inclure membres si autorisé
       if (includeMembers === "true") {
-        const canViewMembers = this.checkPermission(
-          membership,
-          "view_member_list"
-        );
+        const canViewMembers = checkPermission(membership, "view_member_list");
         if (canViewMembers || req.user.role === "super_admin") {
           includes.push({
             model: AssociationMember,
@@ -241,10 +285,7 @@ class AssociationController {
       // Masquer informations sensibles selon permissions
       const response = association.toJSON();
 
-      if (
-        !this.checkPermission(membership, "view_finances") &&
-        req.user.role !== "super_admin"
-      ) {
+      if (!checkPermission(membership, "view_finances") && req.user.role !== "super_admin") {
         delete response.totalBalance;
         delete response.monthlyRevenue;
         delete response.iban;
@@ -255,7 +296,7 @@ class AssociationController {
         data: {
           association: response,
           userMembership: membership,
-          userPermissions: await this.getUserPermissions(req.user.id, id),
+          userPermissions: await getUserPermissions(req.user.id, id),
         },
       });
     } catch (error) {
@@ -711,49 +752,6 @@ class AssociationController {
     }
   }
 
-  // 🔐 UTILITAIRES PERMISSIONS
-  checkPermission(membership, action) {
-    if (!membership || !membership.association) return false;
-
-    const permissions = membership.association.permissionsMatrix || {};
-    const actionConfig = permissions[action];
-
-    if (!actionConfig) return false;
-
-    const userRoles = membership.roles || [];
-    const allowedRoles = actionConfig.allowed_roles || [];
-
-    return userRoles.some((role) => allowedRoles.includes(role));
-  }
-
-  async getUserPermissions(userId, associationId) {
-    try {
-      const membership = await AssociationMember.findOne({
-        where: { userId, associationId, status: "active" },
-        include: [{ model: Association, as: "association" }],
-      });
-
-      if (!membership) return {};
-
-      const permissionsMatrix = membership.association.permissionsMatrix || {};
-      const userRoles = membership.roles || [];
-      const userPermissions = {};
-
-      // Calculer permissions effectives
-      Object.keys(permissionsMatrix).forEach((action) => {
-        const config = permissionsMatrix[action];
-        const allowedRoles = config.allowed_roles || [];
-        userPermissions[action] = userRoles.some((role) =>
-          allowedRoles.includes(role)
-        );
-      });
-
-      return userPermissions;
-    } catch (error) {
-      console.error("Erreur calcul permissions:", error);
-      return {};
-    }
-  }
 
   // 🔄 Mettre à jour cotisations suite changement types membres
   async updateMemberCotisations(associationId, newMemberTypes) {

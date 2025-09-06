@@ -658,4 +658,58 @@ router.get('/profile', authenticate, async (req, res) => {
  }
 });
 
+// **ROUTE: Vérifier si utilisateur existe et a un PIN**
+router.post('/check-user',
+  authLimiter,
+  [
+    body('phoneNumber')
+      .notEmpty()
+      .withMessage('Numéro de téléphone requis')
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({
+          error: 'Données invalides',
+          code: 'VALIDATION_ERROR',
+          details: errors.array()
+        });
+      }
+
+      let { phoneNumber } = req.body;
+      phoneNumber = twilioService.formatPhoneNumber(phoneNumber);
+
+      const user = await User.findOne({ where: { phoneNumber } });
+
+      if (!user) {
+        return res.json({
+          success: true,
+          userExists: false,
+          hasPIN: false,
+          nextAction: 'request_otp'
+        });
+      }
+
+      const hasPIN = user.pinCode && user.status === 'active';
+
+      res.json({
+        success: true,
+        userExists: true,
+        hasPIN: hasPIN,
+        nextAction: hasPIN ? 'login_pin' : 'request_otp'
+      });
+
+    } catch (error) {
+      console.error('Erreur vérification utilisateur:', error);
+      res.status(500).json({
+        error: 'Erreur lors de la vérification',
+        code: 'CHECK_USER_ERROR'
+      });
+    }
+  }
+);
+
+
+
 module.exports = router;

@@ -7,6 +7,18 @@ const rateLimit = require('express-rate-limit');
 
 const app = express();
 
+// Fix CORS pour frontend
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', 'http://localhost:3001');
+  res.header('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+  if (req.method === 'OPTIONS') {
+    res.sendStatus(200);
+  } else {
+    next();
+  }
+});
+
 // 🛡️ Middleware de sécurité (Ladoum style)
 app.use(helmet());
 app.use(compression());
@@ -16,7 +28,9 @@ const corsOptions = {
   origin: process.env.ALLOWED_ORIGINS?.split(',') || [
     'http://localhost:3000', 
     'http://192.168.1.217:19006',
-    'http://192.168.1.217:8081'
+    'http://192.168.1.217:8081',
+    'http://localhost:3001', 
+    'http://127.0.0.1:3001'
   ],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept-Language'],
@@ -64,6 +78,8 @@ const apiV1 = '/api/v1';
 // Routes principales
 app.use(`${apiV1}/auth`, require('./core/auth/routes/auth'));
 app.use(`${apiV1}/associations`, require('./modules/associations/routes'));
+app.use(`${apiV1}/users`, require('./core/users/routes/userRoutes'));
+
 // app.use(`${apiV1}/users`, require('./routes/users')); 
 // app.use(`${apiV1}/tontines`, require('./routes/tontines'));
 // app.use(`${apiV1}/payments`, require('./routes/payments'));1}/payments`, require('./routes/payments'));

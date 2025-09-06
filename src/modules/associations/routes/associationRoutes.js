@@ -1,3 +1,4 @@
+//src/modules/association/routes/associationRoutes.js
 const express = require('express');
 const { authenticate, requireAssociationPermission } = require('../../../core/auth/middleware/auth');
 const { 
