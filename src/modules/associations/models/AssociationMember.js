@@ -1,3 +1,4 @@
+//src/modules/association/models/AssociationMember.js
 'use strict';
 const { Model } = require('sequelize');
 

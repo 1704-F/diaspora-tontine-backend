@@ -310,99 +310,97 @@ class AssociationController {
   }
 
   // 📝 MODIFIER ASSOCIATION
-  async updateAssociation(req, res) {
-    try {
-      const { id } = req.params;
-      const updates = req.body;
+ async updateAssociation(req, res) {
+  try {
+    const { id } = req.params;
+    const { bureauCentral, isMultiSection } = req.body;
 
-      // Vérifier permissions modification
-      const membership = await AssociationMember.findOne({
-        where: {
-          userId: req.user.id,
-          associationId: id,
-          status: "active",
-        },
-      });
+    const updates = {};
 
-      const canModify =
-        membership &&
-        (["president", "central_board"].includes(membership.roles?.[0]) ||
-          req.user.role === "super_admin");
-
-      if (!canModify) {
-        return res.status(403).json({
-          error: "Permissions insuffisantes pour modifier",
-          code: "INSUFFICIENT_PERMISSIONS",
-          required: "president ou central_board",
-        });
+    // Traiter le bureau central si fourni
+    if (bureauCentral) {
+      const processedBureau = {};
+      
+      for (const [role, roleData] of Object.entries(bureauCentral)) {
+        if (roleData.firstName && roleData.lastName && roleData.phoneNumber) {
+          // Formater le numéro de téléphone
+          let formattedPhone = roleData.phoneNumber;
+          if (!formattedPhone.startsWith('+')) {
+            formattedPhone = '+' + formattedPhone.replace(/^0+/, '');
+          }
+          
+          // Chercher utilisateur existant
+          let user = await User.findOne({ 
+            where: { phoneNumber: formattedPhone } 
+          });
+          
+          // Si pas trouvé, créer le compte
+          if (!user) {
+            user = await User.create({
+              firstName: roleData.firstName,
+              lastName: roleData.lastName,
+              phoneNumber: formattedPhone,
+              status: 'pending_verification'
+            });
+            
+            console.log(`Compte créé pour ${roleData.firstName} ${roleData.lastName} (${formattedPhone})`);
+          }
+          
+          // Ajouter au bureau avec la structure attendue
+          processedBureau[role] = {
+            userId: user.id,
+            name: `${user.firstName} ${user.lastName}`,
+            role: roleData.role
+          };
+        }
       }
-
-      // Validation spéciale pour modification critique
-      const criticalFields = [
-        "memberTypes",
-        "bureauCentral",
-        "permissionsMatrix",
-      ];
-      const hasCriticalChanges = Object.keys(updates).some((key) =>
-        criticalFields.includes(key)
-      );
-
-      if (
-        hasCriticalChanges &&
-        membership.roles?.[0] !== "president" &&
-        req.user.role !== "super_admin"
-      ) {
-        return res.status(403).json({
-          error: "Seul le président peut modifier la configuration",
-          code: "PRESIDENT_ONLY_CONFIG",
-        });
-      }
-
-      // Mise à jour
-      const [updatedCount] = await Association.update(updates, {
-        where: { id },
-        returning: true,
-      });
-
-      if (updatedCount === 0) {
-        return res.status(404).json({
-          error: "Association introuvable",
-          code: "ASSOCIATION_NOT_FOUND",
-        });
-      }
-
-      // Retourner association mise à jour
-      const updatedAssociation = await Association.findByPk(id, {
-        include: [
-          { model: Section, as: "sections" },
-          {
-            model: AssociationMember,
-            as: "memberships",
-            include: [
-              {
-                model: User,
-                as: "user",
-                attributes: ["id", "firstName", "lastName", "phoneNumber"],
-              },
-            ],
-          },
-        ],
-      });
-
-      res.json({
-        success: true,
-        message: "Association mise à jour avec succès",
-        data: { association: updatedAssociation },
-      });
-    } catch (error) {
-      console.error("Erreur modification association:", error);
-      res.status(500).json({
-        error: "Erreur modification association",
-        code: "ASSOCIATION_UPDATE_ERROR",
-        details: error.message,
-      });
+      
+      updates.bureauCentral = processedBureau;
     }
+
+    // Traiter le type d'association si fourni
+    if (typeof isMultiSection === 'boolean') {
+      updates.isMultiSection = isMultiSection;
+    }
+
+    // Mettre à jour l'association
+    if (Object.keys(updates).length > 0) {
+      await Association.update(updates, { where: { id } });
+    }
+    
+    res.json({ 
+      success: true, 
+      message: 'Association mise à jour avec succès',
+      updated: Object.keys(updates)
+    });
+    
+  } catch (error) {
+    console.error('Erreur mise à jour association:', error);
+    res.status(500).json({ 
+      error: 'Erreur mise à jour association',
+      details: error.message 
+    });
   }
+}
+
+// Fonction utilitaire pour formater les numéros
+formatPhoneNumber(phone) {
+  // Nettoyer le numéro (supprimer espaces, tirets, etc.)
+  const cleaned = phone.replace(/[\s\-\(\)]/g, '');
+  
+  // Si commence par 0, remplacer selon contexte européen
+  if (cleaned.startsWith('0')) {
+    // Logique à adapter selon le pays de la section
+    return '+33' + cleaned.substring(1); // Exemple France
+  }
+  
+  // Si déjà au format international
+  if (cleaned.startsWith('+')) {
+    return cleaned;
+  }
+  
+  return '+' + cleaned;
+}
 
   // 📋 LISTER ASSOCIATIONS DE L'UTILISATEUR
   async listUserAssociations(req, res) {
@@ -778,69 +776,79 @@ class AssociationController {
   }
 
    // 📁 UPLOAD DOCUMENT KYB
-  async uploadDocument(req, res) {
-    try {
-      const { id: associationId } = req.params;
-      const { type } = req.body;
-      const file = req.file;
+async uploadDocument(req, res) {
+ try {
+   const { id: associationId } = req.params;
+   const { type } = req.body;
+   const file = req.file;
 
-      if (!file) {
-        return res.status(400).json({
-          error: 'Aucun fichier fourni',
-          code: 'NO_FILE_PROVIDED'
-        });
-      }
+   if (!file) {
+     return res.status(400).json({
+       error: 'Aucun fichier fourni',
+       code: 'NO_FILE_PROVIDED'
+     });
+   }
 
-      // Vérifier que l'association existe
-      const association = await Association.findByPk(associationId);
-      if (!association) {
-        return res.status(404).json({
-          error: 'Association introuvable',
-          code: 'ASSOCIATION_NOT_FOUND'
-        });
-      }
+   // Vérifier que l'association existe
+   const association = await Association.findByPk(associationId);
+   if (!association) {
+     return res.status(404).json({
+       error: 'Association introuvable',
+       code: 'ASSOCIATION_NOT_FOUND'
+     });
+   }
 
-      // TODO: Upload vers Cloudinary ou S3
-      // Pour l'instant, stockage temporaire local
-      const fileUrl = `uploads/documents/${file.filename}`;
+   // Mapping des types frontend vers types backend
+   const documentTypeMapping = {
+     'statuts': 'association_statuts',
+     'receipisse': 'association_receipt', 
+     'rib': 'iban_proof',
+     'pv_creation': 'meeting_minutes'
+   };
 
-      // Créer document en DB
-      const { Document } = require('../../../models');
-      const document = await Document.create({
-        userId: req.user.id,
-        associationId: associationId,
-        type: type,
-        title: `Document ${type}`,
-        fileName: file.originalname,
-        fileUrl: fileUrl,
-        fileSize: file.size,
-        mimeType: file.mimetype,
-        status: 'pending',
-        uploadedFrom: 'web'
-      });
+   const mappedType = documentTypeMapping[type] || type;
 
-      res.json({
-        success: true,
-        message: 'Document uploadé avec succès',
-        data: {
-          document: {
-            id: document.id,
-            type: document.type,
-            fileName: document.fileName,
-            status: document.status
-          }
-        }
-      });
+   // TODO: Upload vers Cloudinary ou S3
+   // Pour l'instant, stockage temporaire local
+   const fileUrl = `uploads/documents/${file.filename}`;
 
-    } catch (error) {
-      console.error('Erreur upload document:', error);
-      res.status(500).json({
-        error: 'Erreur upload document',
-        code: 'DOCUMENT_UPLOAD_ERROR',
-        details: error.message
-      });
-    }
-  }
+   // Créer document en DB
+   const { Document } = require('../../../models');
+   const document = await Document.create({
+     userId: req.user.id,
+     associationId: associationId,
+     type: mappedType, // Utiliser le type mappé
+     title: `Document ${type}`,
+     fileName: file.originalname,
+     fileUrl: fileUrl,
+     fileSize: file.size,
+     mimeType: file.mimetype,
+     status: 'pending',
+     uploadedFrom: 'web'
+   });
+
+   res.json({
+     success: true,
+     message: 'Document uploadé avec succès',
+     data: {
+       document: {
+         id: document.id,
+         type: document.type,
+         fileName: document.fileName,
+         status: document.status
+       }
+     }
+   });
+
+ } catch (error) {
+   console.error('Erreur upload document:', error);
+   res.status(500).json({
+     error: 'Erreur upload document',
+     code: 'DOCUMENT_UPLOAD_ERROR',
+     details: error.message
+   });
+ }
+}
 
   // 📄 LISTER DOCUMENTS ASSOCIATION
   async getDocuments(req, res) {
@@ -870,6 +878,193 @@ class AssociationController {
     }
   }
 
+  // 📄 TÉLÉCHARGER DOCUMENT SPÉCIFIQUE
+async downloadDocument(req, res) {
+  try {
+    const { id: associationId, documentId } = req.params;
+
+    const { Document } = require('../../../models');
+    const document = await Document.findOne({
+      where: {
+        id: documentId,
+        associationId: associationId
+      }
+    });
+
+    if (!document) {
+      return res.status(404).json({
+        error: 'Document introuvable',
+        code: 'DOCUMENT_NOT_FOUND'
+      });
+    }
+
+    // Vérifier que le document est téléchargeable
+    if (!document.isDownloadable()) {
+      return res.status(403).json({
+        error: 'Document non accessible',
+        code: 'DOCUMENT_NOT_ACCESSIBLE',
+        status: document.status
+      });
+    }
+
+    // Mettre à jour compteur d'accès
+    await document.update({
+      accessCount: document.accessCount + 1,
+      lastAccessedAt: new Date()
+    });
+
+    // TODO: Pour l'instant, redirection vers l'URL du fichier
+    // Dans une version production, il faudrait :
+    // 1. Vérifier les permissions détaillées
+    // 2. Générer une URL signée temporaire
+    // 3. Servir le fichier via un proxy sécurisé
+
+    res.json({
+      success: true,
+      data: {
+        downloadUrl: document.fileUrl,
+        fileName: document.fileName,
+        fileSize: document.fileSize,
+        mimeType: document.mimeType
+      }
+    });
+
+  } catch (error) {
+    console.error('Erreur téléchargement document:', error);
+    res.status(500).json({
+      error: 'Erreur téléchargement document',
+      code: 'DOCUMENT_DOWNLOAD_ERROR',
+      details: error.message
+    });
+  }
+}
+
+// 🗑️ SUPPRIMER DOCUMENT
+async deleteDocument(req, res) {
+  try {
+    const { id: associationId, documentId } = req.params;
+    
+    const { Document } = require('../../../models');
+    const document = await Document.findOne({
+      where: { 
+        id: documentId, 
+        associationId: associationId 
+      }
+    });
+    
+    if (!document) {
+      return res.status(404).json({
+        error: 'Document introuvable',
+        code: 'DOCUMENT_NOT_FOUND'
+      });
+    }
+    
+    // TODO: Supprimer le fichier physique du stockage (Cloudinary/S3)
+    
+    await document.destroy();
+    
+    res.json({
+      success: true,
+      message: 'Document supprimé avec succès'
+    });
+    
+  } catch (error) {
+    console.error('Erreur suppression document:', error);
+    res.status(500).json({
+      error: 'Erreur suppression document',
+      code: 'DOCUMENT_DELETE_ERROR',
+      details: error.message
+    });
+  }
+}
+
+// 🔧 SETUP ASSOCIATION (traite firstName/lastName/phoneNumber)
+async updateAssociationSetup(req, res) {
+  try {
+    const { id } = req.params;
+    const { bureauCentral, isMultiSection, firstSection } = req.body;
+
+    const updates = {};
+
+    // Traiter le bureau central avec la nouvelle structure
+    if (bureauCentral) {
+      const processedBureau = {};
+      
+      for (const [role, roleData] of Object.entries(bureauCentral)) {
+        if (roleData.firstName && roleData.lastName && roleData.phoneNumber) {
+          // Formater le numéro de téléphone
+          let formattedPhone = roleData.phoneNumber;
+          if (!formattedPhone.startsWith('+')) {
+            formattedPhone = '+' + formattedPhone.replace(/^0+/, '');
+          }
+          
+          // Chercher utilisateur existant
+          let user = await User.findOne({ 
+            where: { phoneNumber: formattedPhone } 
+          });
+          
+          // Si pas trouvé, créer le compte
+          if (!user) {
+            user = await User.create({
+              firstName: roleData.firstName,
+              lastName: roleData.lastName,
+              phoneNumber: formattedPhone,
+              status: 'pending_verification'
+            });
+            
+            console.log(`Compte créé pour ${roleData.firstName} ${roleData.lastName} (${formattedPhone})`);
+          }
+          
+          // Ajouter au bureau avec la structure attendue
+          processedBureau[role] = {
+            userId: user.id,
+            name: `${user.firstName} ${user.lastName}`,
+            role: roleData.role
+          };
+        }
+      }
+      
+      updates.bureauCentral = processedBureau;
+    }
+
+    // Traiter le type d'association
+    if (typeof isMultiSection === 'boolean') {
+      updates.isMultiSection = isMultiSection;
+    }
+
+    // Traiter la première section si fournie
+    if (firstSection && isMultiSection) {
+      // Créer la section via le model Section
+      const { Section } = require('../../../models');
+      await Section.create({
+        associationId: id,
+        name: firstSection.name,
+        country: firstSection.country,
+        city: firstSection.city,
+        currency: firstSection.currency,
+        language: firstSection.language
+      });
+    }
+
+    // Mettre à jour l'association
+    if (Object.keys(updates).length > 0) {
+      await Association.update(updates, { where: { id } });
+    }
+    
+    res.json({ 
+      success: true, 
+      message: 'Setup association terminé avec succès',
+      updated: Object.keys(updates)
+    });
+    
+  } catch (error) {
+    console.error('Erreur setup association:', error);
+    res.status(500).json({ 
+      error: 'Erreur setup association',
+      details: error.message 
+    });
+  }
+}
 
 
 }

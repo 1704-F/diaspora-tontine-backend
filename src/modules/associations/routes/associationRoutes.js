@@ -247,6 +247,43 @@ router.get('/:associationId/overdue-cotisations',
   memberController.getOverdueCotisations
 );
 
+// Upload document KYB
+router.post('/:id/documents',
+  authenticate,
+  upload.single('document'), // Middleware multer
+  requireAssociationPermission('id', 'admin'),
+  associationController.uploadDocument
+);
+
+// Lister documents association
+router.get('/:id/documents',
+  authenticate,
+  requireAssociationPermission('id', 'member'),
+  associationController.getDocuments
+);
+
+// Télécharger document spécifique
+router.get('/:id/documents/:documentId',
+  authenticate,
+  requireAssociationPermission('id', 'member'),
+  associationController.downloadDocument
+);
+
+// Supprimer document spécifique
+router.delete('/:id/documents/:documentId',
+  authenticate,
+  requireAssociationPermission('id', 'admin'),
+  associationController.deleteDocument
+);
+
+// Route spécifique pour setup association (sans validation stricte bureauCentral)
+router.put('/:id/setup',
+  authenticate,
+  validateId,
+  requireAssociationPermission('id', 'admin'),
+  associationController.updateAssociationSetup
+);
+
 // 🚨 GESTION D'ERREURS
 router.use((error, req, res, next) => {
   console.error('Erreur routes associations:', error);
@@ -290,27 +327,7 @@ router.use((error, req, res, next) => {
   });
 });
 
-// Upload document KYB
-router.post('/:id/documents',
-  authenticate,
-  upload.single('document'), // Middleware multer
-  requireAssociationPermission('id', 'admin'),
-  associationController.uploadDocument
-);
 
-// Lister documents association
-router.get('/:id/documents',
-  authenticate,
-  requireAssociationPermission('id', 'member'),
-  associationController.getDocuments
-);
-
-// Télécharger document spécifique
-router.get('/:id/documents/:documentId',
-  authenticate,
-  requireAssociationPermission('id', 'member'),
-  associationController.downloadDocument
-);
 
 
 
