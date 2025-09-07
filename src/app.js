@@ -7,11 +7,13 @@ const rateLimit = require('express-rate-limit');
 
 const app = express();
 
-// Fix CORS pour frontend
+// 🔥 CORS Manuel - DOIT ÊTRE EN PREMIER
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', 'http://localhost:3001');
-  res.header('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+  res.header('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS,PATCH');
+  res.header('Access-Control-Allow-Headers', 'Content-Type,Authorization,Cache-Control,Pragma,X-Requested-With,Accept,Origin,Accept-Language');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  
   if (req.method === 'OPTIONS') {
     res.sendStatus(200);
   } else {
@@ -23,7 +25,7 @@ app.use((req, res, next) => {
 app.use(helmet());
 app.use(compression());
 
-// 🌍 CORS Configuration
+// 🌍 CORS Configuration - BACKUP
 const corsOptions = {
   origin: process.env.ALLOWED_ORIGINS?.split(',') || [
     'http://localhost:3000', 
@@ -32,8 +34,17 @@ const corsOptions = {
     'http://localhost:3001', 
     'http://127.0.0.1:3001'
   ],
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Accept-Language'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization', 
+    'Accept-Language',
+    'Cache-Control',
+    'Pragma',
+    'X-Requested-With',
+    'Accept',
+    'Origin'
+  ],
   credentials: true
 };
 app.use(cors(corsOptions));
@@ -82,7 +93,7 @@ app.use(`${apiV1}/users`, require('./core/users/routes/userRoutes'));
 
 // app.use(`${apiV1}/users`, require('./routes/users')); 
 // app.use(`${apiV1}/tontines`, require('./routes/tontines'));
-// app.use(`${apiV1}/payments`, require('./routes/payments'));1}/payments`, require('./routes/payments'));
+// app.use(`${apiV1}/payments`, require('./routes/payments'));
 
 // 🧪 Route de test pour vérifier les models
 app.get(`${apiV1}/test/models`, async (req, res) => {
