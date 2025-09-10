@@ -249,75 +249,38 @@ const requireRole = (...allowedRoles) => {
 };
 
 // Middleware RBAC - Vérifier permissions association
-const requireAssociationPermission = (associationParam = 'associationId', requiredRole = 'member') => {
+const requireAssociationPermission = (associationParam, requiredRoleOrRoles) => {
   return async (req, res, next) => {
     try {
-      if (!req.user) {
-        return res.status(401).json({
-          error: 'Authentification requise',
-          code: 'AUTH_REQUIRED'
-        });
-      }
-
-      const associationId = req.params[associationParam] || req.body[associationParam];
-      
-      if (!associationId) {
-        return res.status(400).json({
-          error: 'ID association requis',
-          code: 'MISSING_ASSOCIATION_ID'
-        });
-      }
-
-      // Vérifier membership
+      const associationId = req.params[associationParam];
       const membership = await AssociationMember.findOne({
-        where: {
-          userId: req.user.id,
-          associationId: associationId,
-          status: 'active'
-        }
+        where: { userId: req.user.id, associationId, status: 'active' }
+        // Supprimer l'include - pas nécessaire ici
       });
 
       if (!membership) {
-        return res.status(403).json({
-          error: 'Accès association non autorisé',
-          code: 'NOT_ASSOCIATION_MEMBER'
-        });
+        return res.status(403).json({ error: 'Accès association non autorisé' });
       }
 
-      // Vérifier niveau de permissions
-      const roleHierarchy = {
-        'member': 1,
-        'active_member': 2,
-        'delegate': 3,
-        'board_member': 4,
-        'secretary': 5,
-        'treasurer': 5,
-        'president': 6,
-        'central_board': 7,
-        'founder': 8
-      };
-
-      const userLevel = roleHierarchy[membership.role] || 1;
-      const requiredLevel = roleHierarchy[requiredRole] || 1;
-
-      if (userLevel < requiredLevel) {
-        return res.status(403).json({
-          error: 'Niveau de permissions insuffisant',
-          code: 'INSUFFICIENT_ASSOCIATION_PERMISSIONS',
-          required: requiredRole,
-          current: membership.role
-        });
-      }
-
-      // Ajouter membership à la requête
-      req.associationMembership = membership;
+      const userRoles = membership.roles || [];
       
-      next();
+      // ADMIN a TOUS les droits
+      if (userRoles.includes('admin_association')) {
+        return next();
+      }
+
+      // Pour les autres, vérifier rôles requis
+      const requiredRoles = Array.isArray(requiredRoleOrRoles) ? requiredRoleOrRoles : [requiredRoleOrRoles];
+      const hasRequiredRole = requiredRoles.some(role => userRoles.includes(role));
+
+      if (hasRequiredRole) {
+        return next();
+      }
+
+      return res.status(403).json({ error: 'Permissions insuffisantes' });
     } catch (error) {
-      console.error('Erreur vérification permission association:', error);
-      return res.status(500).json({
-        error: 'Erreur vérification permissions association'
-      });
+      console.error('Erreur middleware permission:', error); // Ajouter ce log
+      return res.status(500).json({ error: 'Erreur vérification permissions' });
     }
   };
 };

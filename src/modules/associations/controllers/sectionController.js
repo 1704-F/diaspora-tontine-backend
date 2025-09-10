@@ -1,8 +1,13 @@
-const { Association, Section, AssociationMember, User, Transaction } = require('../../../models');
-const { Op } = require('sequelize');
+const {
+  Association,
+  Section,
+  AssociationMember,
+  User,
+  Transaction,
+} = require("../../../models");
+const { Op } = require("sequelize");
 
 class SectionController {
-
   // 🏗️ CRÉER SECTION
   async createSection(req, res) {
     try {
@@ -19,7 +24,7 @@ class SectionController {
         contactPhone,
         contactEmail,
         cotisationRates,
-        bureauSection
+        bureauSection,
       } = req.body;
 
       // Vérifier que l'association existe et que l'utilisateur a les droits
@@ -27,19 +32,22 @@ class SectionController {
         where: {
           userId: req.user.id,
           associationId,
-          status: 'active'
+          status: "active",
         },
-        include: [{ model: Association, as: 'association' }]
+        include: [{ model: Association, as: "association" }],
       });
 
-      const canCreateSection = membership && 
-        (['president', 'central_board'].includes(membership.roles?.[0]) || 
-         req.user.role === 'super_admin');
+      const canCreateSection =
+        membership &&
+        (["admin_association", "central_board"].includes(
+          membership.roles?.[0]
+        ) ||
+          req.user.role === "super_admin");
 
       if (!canCreateSection) {
         return res.status(403).json({
-          error: 'Seul le bureau central peut créer une section',
-          code: 'CENTRAL_BOARD_ONLY'
+          error: "Seul l'admin ou le bureau central peut créer une section",
+          code: "ADMIN_OR_CENTRAL_BOARD_ONLY",
         });
       }
 
@@ -47,14 +55,14 @@ class SectionController {
       const existingSection = await Section.findOne({
         where: {
           associationId,
-          name
-        }
+          name,
+        },
       });
 
       if (existingSection) {
         return res.status(400).json({
-          error: 'Une section avec ce nom existe déjà',
-          code: 'SECTION_NAME_EXISTS'
+          error: "Une section avec ce nom existe déjà",
+          code: "SECTION_NAME_EXISTS",
         });
       }
 
@@ -66,14 +74,14 @@ class SectionController {
         country,
         city,
         region,
-        currency: currency || 'EUR',
-        language: language || 'fr',
-        timezone: timezone || 'Europe/Paris',
+        currency: currency || "EUR",
+        language: language || "fr",
+        timezone: timezone || "Europe/Paris",
         contactPhone,
         contactEmail,
         cotisationRates: cotisationRates || {},
         bureauSection: bureauSection || {},
-        foundedDate: new Date()
+        foundedDate: new Date(),
       });
 
       // Si bureau section fourni, créer les relations membres
@@ -83,16 +91,15 @@ class SectionController {
 
       res.status(201).json({
         success: true,
-        message: 'Section créée avec succès',
-        data: { section }
+        message: "Section créée avec succès",
+        data: { section },
       });
-
     } catch (error) {
-      console.error('Erreur création section:', error);
+      console.error("Erreur création section:", error);
       res.status(500).json({
-        error: 'Erreur création section',
-        code: 'SECTION_CREATION_ERROR',
-        details: error.message
+        error: "Erreur création section",
+        code: "SECTION_CREATION_ERROR",
+        details: error.message,
       });
     }
   }
@@ -108,46 +115,48 @@ class SectionController {
         where: {
           userId: req.user.id,
           associationId,
-          status: 'active'
-        }
+          status: "active",
+        },
       });
 
-      if (!membership && req.user.role !== 'super_admin') {
+      if (!membership && req.user.role !== "super_admin") {
         return res.status(403).json({
-          error: 'Accès association non autorisé',
-          code: 'ASSOCIATION_ACCESS_DENIED'
+          error: "Accès association non autorisé",
+          code: "ASSOCIATION_ACCESS_DENIED",
         });
       }
 
       // Construire query selon permissions
       const includes = [];
-      
-      if (includeMembers === 'true') {
+
+      if (includeMembers === "true") {
         includes.push({
           model: AssociationMember,
-          as: 'members',
-          include: [{ 
-            model: User, 
-            as: 'user', 
-            attributes: ['id', 'fullName', 'phoneNumber'] 
-          }]
+          as: "members",
+          include: [
+            {
+              model: User,
+              as: "user",
+              attributes: ["id", "fullName", "phoneNumber"],
+            },
+          ],
         });
       }
 
       const sections = await Section.findAll({
         where: { associationId },
         include: includes,
-        order: [['created_at', 'ASC']]
+        order: [["created_at", "ASC"]],
       });
 
       // Ajouter statistiques si demandées
       let sectionsWithStats = sections;
-      if (includeStats === 'true') {
+      if (includeStats === "true") {
         sectionsWithStats = await Promise.all(
           sections.map(async (section) => {
             const [membersCount, monthlyRevenue] = await Promise.all([
               section.getActiveMembersCount(),
-              section.getMonthlyContributions()
+              section.getMonthlyContributions(),
             ]);
 
             return {
@@ -155,8 +164,8 @@ class SectionController {
               stats: {
                 membersCount,
                 monthlyRevenue,
-                bureauComplete: section.hasBureauComplete()
-              }
+                bureauComplete: section.hasBureauComplete(),
+              },
             };
           })
         );
@@ -164,15 +173,14 @@ class SectionController {
 
       res.json({
         success: true,
-        data: { sections: sectionsWithStats }
+        data: { sections: sectionsWithStats },
       });
-
     } catch (error) {
-      console.error('Erreur liste sections:', error);
+      console.error("Erreur liste sections:", error);
       res.status(500).json({
-        error: 'Erreur récupération sections',
-        code: 'SECTIONS_FETCH_ERROR',
-        details: error.message
+        error: "Erreur récupération sections",
+        code: "SECTIONS_FETCH_ERROR",
+        details: error.message,
       });
     }
   }
@@ -189,39 +197,46 @@ class SectionController {
           where: {
             userId: req.user.id,
             associationId,
-            status: 'active'
-          }
+            status: "active",
+          },
         }),
         AssociationMember.findOne({
           where: {
             userId: req.user.id,
             associationId,
             sectionId,
-            status: 'active'
-          }
-        })
+            status: "active",
+          },
+        }),
       ]);
 
-      const canModify = (centralMembership && ['president', 'central_board'].includes(centralMembership.roles?.[0])) ||
-                       (sectionMembership && ['responsable_section', 'secretaire_section'].includes(sectionMembership.roles?.[0])) ||
-                       req.user.role === 'super_admin';
+      const canModify =
+        (centralMembership &&
+          ["president", "central_board"].includes(
+            centralMembership.roles?.[0]
+          )) ||
+        (sectionMembership &&
+          ["responsable_section", "secretaire_section"].includes(
+            sectionMembership.roles?.[0]
+          )) ||
+        req.user.role === "super_admin";
 
       if (!canModify) {
         return res.status(403).json({
-          error: 'Permissions insuffisantes pour modifier la section',
-          code: 'INSUFFICIENT_SECTION_PERMISSIONS'
+          error: "Permissions insuffisantes pour modifier la section",
+          code: "INSUFFICIENT_SECTION_PERMISSIONS",
         });
       }
 
       // Vérifier que la section existe
       const section = await Section.findOne({
-        where: { id: sectionId, associationId }
+        where: { id: sectionId, associationId },
       });
 
       if (!section) {
         return res.status(404).json({
-          error: 'Section introuvable',
-          code: 'SECTION_NOT_FOUND'
+          error: "Section introuvable",
+          code: "SECTION_NOT_FOUND",
         });
       }
 
@@ -230,16 +245,15 @@ class SectionController {
 
       res.json({
         success: true,
-        message: 'Section mise à jour avec succès',
-        data: { section }
+        message: "Section mise à jour avec succès",
+        data: { section },
       });
-
     } catch (error) {
-      console.error('Erreur modification section:', error);
+      console.error("Erreur modification section:", error);
       res.status(500).json({
-        error: 'Erreur modification section',
-        code: 'SECTION_UPDATE_ERROR',
-        details: error.message
+        error: "Erreur modification section",
+        code: "SECTION_UPDATE_ERROR",
+        details: error.message,
       });
     }
   }
@@ -255,37 +269,43 @@ class SectionController {
         where: {
           userId: req.user.id,
           associationId,
-          status: 'active'
-        }
+          status: "active",
+        },
       });
 
-      const canManageBureau = (membership && ['president', 'central_board'].includes(membership.roles?.[0])) || 
-                             req.user.role === 'super_admin';
+      const canManageBureau =
+        (membership &&
+          ["president", "central_board"].includes(membership.roles?.[0])) ||
+        req.user.role === "super_admin";
 
       if (!canManageBureau) {
         return res.status(403).json({
-          error: 'Seul le bureau central peut gérer le bureau section',
-          code: 'CENTRAL_BOARD_ONLY'
+          error: "Seul le bureau central peut gérer le bureau section",
+          code: "CENTRAL_BOARD_ONLY",
         });
       }
 
       // Vérifier que tous les utilisateurs sont membres de la section
-      const bureauUserIds = [responsable?.userId, secretaire?.userId, tresorier?.userId].filter(Boolean);
-      
+      const bureauUserIds = [
+        responsable?.userId,
+        secretaire?.userId,
+        tresorier?.userId,
+      ].filter(Boolean);
+
       if (bureauUserIds.length > 0) {
         const validMembers = await AssociationMember.count({
           where: {
             userId: { [Op.in]: bureauUserIds },
             associationId,
             sectionId,
-            status: 'active'
-          }
+            status: "active",
+          },
         });
 
         if (validMembers !== bureauUserIds.length) {
           return res.status(400).json({
-            error: 'Tous les membres bureau doivent appartenir à cette section',
-            code: 'INVALID_BUREAU_MEMBERS'
+            error: "Tous les membres bureau doivent appartenir à cette section",
+            code: "INVALID_BUREAU_MEMBERS",
           });
         }
       }
@@ -296,7 +316,7 @@ class SectionController {
         secretaire: secretaire || null,
         tresorier: tresorier || null,
         updatedAt: new Date(),
-        updatedBy: req.user.id
+        updatedBy: req.user.id,
       };
 
       await Section.update(
@@ -309,16 +329,15 @@ class SectionController {
 
       res.json({
         success: true,
-        message: 'Bureau section mis à jour avec succès',
-        data: { bureau: newBureau }
+        message: "Bureau section mis à jour avec succès",
+        data: { bureau: newBureau },
       });
-
     } catch (error) {
-      console.error('Erreur mise à jour bureau section:', error);
+      console.error("Erreur mise à jour bureau section:", error);
       res.status(500).json({
-        error: 'Erreur mise à jour bureau section',
-        code: 'BUREAU_UPDATE_ERROR',
-        details: error.message
+        error: "Erreur mise à jour bureau section",
+        code: "BUREAU_UPDATE_ERROR",
+        details: error.message,
       });
     }
   }
@@ -333,25 +352,25 @@ class SectionController {
         where: {
           userId: req.user.id,
           associationId,
-          status: 'active'
-        }
+          status: "active",
+        },
       });
 
-      if (!membership && req.user.role !== 'super_admin') {
+      if (!membership && req.user.role !== "super_admin") {
         return res.status(403).json({
-          error: 'Accès non autorisé',
-          code: 'ACCESS_DENIED'
+          error: "Accès non autorisé",
+          code: "ACCESS_DENIED",
         });
       }
 
       const section = await Section.findOne({
-        where: { id: sectionId, associationId }
+        where: { id: sectionId, associationId },
       });
 
       if (!section) {
         return res.status(404).json({
-          error: 'Section introuvable',
-          code: 'SECTION_NOT_FOUND'
+          error: "Section introuvable",
+          code: "SECTION_NOT_FOUND",
         });
       }
 
@@ -361,28 +380,28 @@ class SectionController {
         activeMembers,
         monthlyRevenue,
         totalTransactions,
-        averageCotisation
+        averageCotisation,
       ] = await Promise.all([
         AssociationMember.count({ where: { sectionId } }),
-        AssociationMember.count({ where: { sectionId, status: 'active' } }),
+        AssociationMember.count({ where: { sectionId, status: "active" } }),
         section.getMonthlyContributions(),
         Transaction.count({
           where: {
             sectionId,
-            status: 'completed'
-          }
+            status: "completed",
+          },
         }),
         Transaction.findOne({
           where: {
             sectionId,
-            type: 'cotisation',
-            status: 'completed'
+            type: "cotisation",
+            status: "completed",
           },
           attributes: [
-            [sequelize.fn('AVG', sequelize.col('amount')), 'average']
+            [sequelize.fn("AVG", sequelize.col("amount")), "average"],
           ],
-          raw: true
-        })
+          raw: true,
+        }),
       ]);
 
       res.json({
@@ -392,34 +411,33 @@ class SectionController {
             id: section.id,
             name: section.name,
             country: section.country,
-            city: section.city
+            city: section.city,
           },
           stats: {
             members: {
               total: totalMembers,
               active: activeMembers,
-              inactive: totalMembers - activeMembers
+              inactive: totalMembers - activeMembers,
             },
             finances: {
               monthlyRevenue,
               totalTransactions,
-              averageCotisation: parseFloat(averageCotisation?.average || 0)
+              averageCotisation: parseFloat(averageCotisation?.average || 0),
             },
             bureau: {
               isComplete: section.hasBureauComplete(),
-              roles: section.bureauSection || {}
-            }
+              roles: section.bureauSection || {},
+            },
           },
-          lastUpdated: new Date()
-        }
+          lastUpdated: new Date(),
+        },
       });
-
     } catch (error) {
-      console.error('Erreur statistiques section:', error);
+      console.error("Erreur statistiques section:", error);
       res.status(500).json({
-        error: 'Erreur récupération statistiques section',
-        code: 'SECTION_STATS_ERROR',
-        details: error.message
+        error: "Erreur récupération statistiques section",
+        code: "SECTION_STATS_ERROR",
+        details: error.message,
       });
     }
   }
@@ -434,17 +452,18 @@ class SectionController {
         where: {
           userId: req.user.id,
           associationId,
-          status: 'active'
-        }
+          status: "active",
+        },
       });
 
-      const canDelete = (membership && membership.roles?.includes('president')) || 
-                       req.user.role === 'super_admin';
+      const canDelete =
+        (membership && membership.roles?.includes("president")) ||
+        req.user.role === "super_admin";
 
       if (!canDelete) {
         return res.status(403).json({
-          error: 'Seul le président peut supprimer une section',
-          code: 'PRESIDENT_ONLY_DELETE'
+          error: "Seul le président peut supprimer une section",
+          code: "PRESIDENT_ONLY_DELETE",
         });
       }
 
@@ -452,15 +471,15 @@ class SectionController {
       const activeMembers = await AssociationMember.count({
         where: {
           sectionId,
-          status: 'active'
-        }
+          status: "active",
+        },
       });
 
       if (activeMembers > 0) {
         return res.status(400).json({
-          error: 'Impossible de supprimer: section contient des membres actifs',
-          code: 'SECTION_HAS_ACTIVE_MEMBERS',
-          count: activeMembers
+          error: "Impossible de supprimer: section contient des membres actifs",
+          code: "SECTION_HAS_ACTIVE_MEMBERS",
+          count: activeMembers,
         });
       }
 
@@ -468,35 +487,34 @@ class SectionController {
       const pendingTransactions = await Transaction.count({
         where: {
           sectionId,
-          status: ['pending', 'processing']
-        }
+          status: ["pending", "processing"],
+        },
       });
 
       if (pendingTransactions > 0) {
         return res.status(400).json({
-          error: 'Impossible de supprimer: transactions en cours',
-          code: 'PENDING_TRANSACTIONS',
-          count: pendingTransactions
+          error: "Impossible de supprimer: transactions en cours",
+          code: "PENDING_TRANSACTIONS",
+          count: pendingTransactions,
         });
       }
 
       // Soft delete de la section
       await Section.update(
-        { status: 'inactive' },
+        { status: "inactive" },
         { where: { id: sectionId, associationId } }
       );
 
       res.json({
         success: true,
-        message: 'Section supprimée avec succès'
+        message: "Section supprimée avec succès",
       });
-
     } catch (error) {
-      console.error('Erreur suppression section:', error);
+      console.error("Erreur suppression section:", error);
       res.status(500).json({
-        error: 'Erreur suppression section',
-        code: 'SECTION_DELETE_ERROR',
-        details: error.message
+        error: "Erreur suppression section",
+        code: "SECTION_DELETE_ERROR",
+        details: error.message,
       });
     }
   }
@@ -512,18 +530,21 @@ class SectionController {
         where: {
           userId: req.user.id,
           associationId,
-          status: 'active'
-        }
+          status: "active",
+        },
       });
 
-      const canTransfer = membership && 
-        (['president', 'central_board', 'responsable_section'].includes(membership.roles?.[0]) || 
-         req.user.role === 'super_admin');
+      const canTransfer =
+        membership &&
+        (["president", "central_board", "responsable_section"].includes(
+          membership.roles?.[0]
+        ) ||
+          req.user.role === "super_admin");
 
       if (!canTransfer) {
         return res.status(403).json({
-          error: 'Permissions insuffisantes pour transférer un membre',
-          code: 'INSUFFICIENT_TRANSFER_PERMISSIONS'
+          error: "Permissions insuffisantes pour transférer un membre",
+          code: "INSUFFICIENT_TRANSFER_PERMISSIONS",
         });
       }
 
@@ -531,24 +552,26 @@ class SectionController {
       const [member, sourceSection, targetSection] = await Promise.all([
         AssociationMember.findOne({
           where: { id: memberId, associationId, sectionId },
-          include: [{ model: User, as: 'user', attributes: ['id', 'fullName'] }]
+          include: [
+            { model: User, as: "user", attributes: ["id", "fullName"] },
+          ],
         }),
         Section.findByPk(sectionId),
-        Section.findByPk(targetSectionId)
+        Section.findByPk(targetSectionId),
       ]);
 
       if (!member || !sourceSection || !targetSection) {
         return res.status(404).json({
-          error: 'Membre ou section introuvable',
-          code: 'TRANSFER_ENTITIES_NOT_FOUND'
+          error: "Membre ou section introuvable",
+          code: "TRANSFER_ENTITIES_NOT_FOUND",
         });
       }
 
       // Vérifier que target section appartient bien à la même association
       if (targetSection.associationId !== parseInt(associationId)) {
         return res.status(400).json({
-          error: 'Section destination doit appartenir à la même association',
-          code: 'INVALID_TARGET_SECTION'
+          error: "Section destination doit appartenir à la même association",
+          code: "INVALID_TARGET_SECTION",
         });
       }
 
@@ -557,48 +580,50 @@ class SectionController {
         fromSection: {
           id: sourceSection.id,
           name: sourceSection.name,
-          country: sourceSection.country
+          country: sourceSection.country,
         },
         toSection: {
           id: targetSection.id,
           name: targetSection.name,
-          country: targetSection.country
+          country: targetSection.country,
         },
         transferredAt: new Date(),
         transferredBy: req.user.id,
-        reason: reason || 'Transfert administratif'
+        reason: reason || "Transfert administratif",
       };
 
       // Mettre à jour membre
       await member.update({
         sectionId: targetSectionId,
-        cotisationAmount: targetSection.cotisationRates?.[member.memberType] || member.cotisationAmount,
-        transferHistory: [
-          ...(member.transferHistory || []),
-          transferData
-        ]
+        cotisationAmount:
+          targetSection.cotisationRates?.[member.memberType] ||
+          member.cotisationAmount,
+        transferHistory: [...(member.transferHistory || []), transferData],
       });
 
       res.json({
         success: true,
-        message: 'Membre transféré avec succès',
+        message: "Membre transféré avec succès",
         data: {
           member: await AssociationMember.findByPk(member.id, {
             include: [
-              { model: User, as: 'user', attributes: ['id', 'fullName'] },
-              { model: Section, as: 'section', attributes: ['id', 'name', 'country'] }
-            ]
+              { model: User, as: "user", attributes: ["id", "fullName"] },
+              {
+                model: Section,
+                as: "section",
+                attributes: ["id", "name", "country"],
+              },
+            ],
           }),
-          transfer: transferData
-        }
+          transfer: transferData,
+        },
       });
-
     } catch (error) {
-      console.error('Erreur transfert membre:', error);
+      console.error("Erreur transfert membre:", error);
       res.status(500).json({
-        error: 'Erreur transfert membre',
-        code: 'MEMBER_TRANSFER_ERROR',
-        details: error.message
+        error: "Erreur transfert membre",
+        code: "MEMBER_TRANSFER_ERROR",
+        details: error.message,
       });
     }
   }
@@ -608,28 +633,28 @@ class SectionController {
   // Assigner membres aux rôles bureau section
   async assignBureauSection(sectionId, bureauSection) {
     try {
-      const roles = ['responsable', 'secretaire', 'tresorier'];
-      
+      const roles = ["responsable", "secretaire", "tresorier"];
+
       for (const role of roles) {
         const assignment = bureauSection[role];
         if (assignment && assignment.userId) {
           // Mettre à jour le membre avec le nouveau rôle
           await AssociationMember.update(
-            { 
-              roles: [role + '_section'],
-              lastActiveDate: new Date()
+            {
+              roles: [role + "_section"],
+              lastActiveDate: new Date(),
             },
-            { 
-              where: { 
+            {
+              where: {
                 userId: assignment.userId,
-                sectionId
-              }
+                sectionId,
+              },
             }
           );
         }
       }
     } catch (error) {
-      console.error('Erreur assignation bureau section:', error);
+      console.error("Erreur assignation bureau section:", error);
       throw error;
     }
   }
@@ -639,48 +664,53 @@ class SectionController {
     try {
       // Réinitialiser tous les rôles bureau de la section
       await AssociationMember.update(
-        { 
+        {
           roles: sequelize.fn(
-            'array_remove', 
-            sequelize.fn('array_remove',
-              sequelize.fn('array_remove', 
-                sequelize.col('roles'), 
-                'responsable_section'
-              ), 
-              'secretaire_section'
+            "array_remove",
+            sequelize.fn(
+              "array_remove",
+              sequelize.fn(
+                "array_remove",
+                sequelize.col("roles"),
+                "responsable_section"
+              ),
+              "secretaire_section"
             ),
-            'tresorier_section'
-          )
+            "tresorier_section"
+          ),
         },
         { where: { associationId, sectionId } }
       );
 
       // Assigner nouveaux rôles
       const assignments = [
-        { role: 'responsable_section', userId: newBureau.responsable?.userId },
-        { role: 'secretaire_section', userId: newBureau.secretaire?.userId },
-        { role: 'tresorier_section', userId: newBureau.tresorier?.userId }
+        { role: "responsable_section", userId: newBureau.responsable?.userId },
+        { role: "secretaire_section", userId: newBureau.secretaire?.userId },
+        { role: "tresorier_section", userId: newBureau.tresorier?.userId },
       ];
 
       for (const assignment of assignments) {
         if (assignment.userId) {
           await AssociationMember.update(
-            { 
-              roles: sequelize.fn('array_append', sequelize.col('roles'), assignment.role)
+            {
+              roles: sequelize.fn(
+                "array_append",
+                sequelize.col("roles"),
+                assignment.role
+              ),
             },
-            { 
-              where: { 
+            {
+              where: {
                 userId: assignment.userId,
                 associationId,
-                sectionId
-              }
+                sectionId,
+              },
             }
           );
         }
       }
-
     } catch (error) {
-      console.error('Erreur mise à jour rôles membres:', error);
+      console.error("Erreur mise à jour rôles membres:", error);
       throw error;
     }
   }
@@ -695,80 +725,90 @@ class SectionController {
         where: {
           userId: req.user.id,
           associationId,
-          status: 'active'
-        }
+          status: "active",
+        },
       });
 
-      const canView = (membership && ['president', 'central_board', 'tresorier'].includes(membership.roles?.[0])) || 
-                     req.user.role === 'super_admin';
+      const canView =
+        (membership &&
+          ["president", "central_board", "tresorier"].includes(
+            membership.roles?.[0]
+          )) ||
+        req.user.role === "super_admin";
 
       if (!canView) {
         return res.status(403).json({
-          error: 'Accès réservé au bureau central',
-          code: 'CENTRAL_BOARD_ONLY'
+          error: "Accès réservé au bureau central",
+          code: "CENTRAL_BOARD_ONLY",
         });
       }
 
       const sections = await Section.findAll({
-        where: { associationId, status: 'active' }
+        where: { associationId, status: "active" },
       });
 
       // Calculer stats comparatives
       const comparison = await Promise.all(
         sections.map(async (section) => {
-          const [membersCount, monthlyRevenue, averageCotisation] = await Promise.all([
-            section.getActiveMembersCount(),
-            section.getMonthlyContributions(),
-            Transaction.findOne({
-              where: {
-                sectionId: section.id,
-                type: 'cotisation',
-                status: 'completed'
-              },
-              attributes: [[sequelize.fn('AVG', sequelize.col('amount')), 'average']],
-              raw: true
-            })
-          ]);
+          const [membersCount, monthlyRevenue, averageCotisation] =
+            await Promise.all([
+              section.getActiveMembersCount(),
+              section.getMonthlyContributions(),
+              Transaction.findOne({
+                where: {
+                  sectionId: section.id,
+                  type: "cotisation",
+                  status: "completed",
+                },
+                attributes: [
+                  [sequelize.fn("AVG", sequelize.col("amount")), "average"],
+                ],
+                raw: true,
+              }),
+            ]);
 
           return {
             section: {
               id: section.id,
               name: section.name,
               country: section.country,
-              city: section.city
+              city: section.city,
             },
             stats: {
               membersCount,
               monthlyRevenue,
               averageCotisation: parseFloat(averageCotisation?.average || 0),
-              revenuePerMember: membersCount > 0 ? monthlyRevenue / membersCount : 0
-            }
+              revenuePerMember:
+                membersCount > 0 ? monthlyRevenue / membersCount : 0,
+            },
           };
         })
       );
 
       // Calculer totaux
-      const totals = comparison.reduce((acc, item) => {
-        acc.totalMembers += item.stats.membersCount;
-        acc.totalRevenue += item.stats.monthlyRevenue;
-        return acc;
-      }, { totalMembers: 0, totalRevenue: 0 });
+      const totals = comparison.reduce(
+        (acc, item) => {
+          acc.totalMembers += item.stats.membersCount;
+          acc.totalRevenue += item.stats.monthlyRevenue;
+          return acc;
+        },
+        { totalMembers: 0, totalRevenue: 0 }
+      );
 
       res.json({
         success: true,
         data: {
           comparison,
           totals,
-          generatedAt: new Date()
-        }
+          generatedAt: new Date(),
+        },
       });
-
     } catch (error) {
-      console.error('Erreur rapport sections:', error);
+      console.error("Erreur rapport sections:", error);
       res.status(500).json({
-        error: 'Erreur génération rapport sections',
-        code: 'SECTIONS_REPORT_ERROR',
-        details: error.message
+        error: "Erreur génération rapport sections",
+        code: "SECTIONS_REPORT_ERROR",
+        details: error.message,
       });
     }
   }
