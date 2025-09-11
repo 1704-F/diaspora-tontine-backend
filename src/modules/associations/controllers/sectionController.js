@@ -812,6 +812,123 @@ class SectionController {
       });
     }
   }
+
+ async getSectionDetails(req, res) {
+  try {
+    const { associationId, sectionId } = req.params;
+
+    // Vérifier accès association
+    const membership = await AssociationMember.findOne({
+      where: {
+        userId: req.user.id,
+        associationId,
+        status: 'active'
+      }
+    });
+
+    if (!membership && req.user.role !== 'super_admin') {
+      return res.status(403).json({
+        error: 'Accès association non autorisé',
+        code: 'ASSOCIATION_ACCESS_DENIED'
+      });
+    }
+
+    // Récupérer la section avec statistiques
+    const section = await Section.findOne({
+      where: { 
+        id: sectionId,
+        associationId 
+      },
+      include: [
+        {
+          model: Association,
+          as: 'association',
+          attributes: ['id', 'name', 'isMultiSection']
+        }
+      ]
+    });
+
+    if (!section) {
+      return res.status(404).json({
+        error: 'Section introuvable',
+        code: 'SECTION_NOT_FOUND'
+      });
+    }
+
+    // Calculer statistiques section
+    const [membersCount, activeMembers, pendingMembers] = await Promise.all([
+      AssociationMember.count({
+        where: { 
+          associationId,
+          sectionId: section.id 
+        }
+      }),
+      AssociationMember.count({
+        where: { 
+          associationId,
+          sectionId: section.id,
+          status: 'active'
+        }
+      }),
+      AssociationMember.count({
+        where: { 
+          associationId,
+          sectionId: section.id,
+          status: 'pending'
+        }
+      })
+    ]);
+
+    // Calculer revenus mensuels (estimation)
+    const association = await Association.findByPk(associationId);
+    const memberTypes = association?.memberTypes || {};
+    
+    let monthlyRevenue = 0;
+    if (Object.keys(memberTypes).length > 0) {
+      // Estimation basée sur le type membre le plus courant
+      const averageCotisation = Object.values(memberTypes)
+        .reduce((sum, type) => sum + (type.monthlyAmount || 0), 0) / Object.keys(memberTypes).length;
+      monthlyRevenue = Math.round(activeMembers * averageCotisation);
+    }
+
+    // Vérifier si bureau complet
+    const bureau = section.bureauSection || {};
+    const bureauComplete = !!(bureau.responsable?.name && bureau.secretaire?.name && bureau.tresorier?.name);
+
+    // Mettre à jour le count si différent
+    if (section.membersCount !== membersCount) {
+      await section.update({ membersCount });
+    }
+
+    const sectionWithStats = {
+      ...section.toJSON(),
+      membersCount,
+      stats: {
+        activeMembers,
+        pendingMembers,
+        monthlyRevenue,
+        bureauComplete
+      }
+    };
+
+    res.json({
+      success: true,
+      data: {
+        section: sectionWithStats
+      }
+    });
+
+  } catch (error) {
+    console.error('Erreur récupération section:', error);
+    res.status(500).json({
+      error: 'Erreur récupération section',
+      code: 'SECTION_FETCH_ERROR',
+      details: error.message
+    });
+  }
+}
+
+
 }
 
 module.exports = new SectionController();

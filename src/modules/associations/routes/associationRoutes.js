@@ -118,6 +118,16 @@ router.get('/:associationId/sections',
   sectionController.listSections
 );
 
+// Détails d'une section
+router.get('/:associationId/sections/:sectionId',
+  authenticate,
+  validateAssociationId,
+  requireAssociationPermission('associationId', 'member'),
+  sectionController.getSectionDetails
+);
+
+
+
 // Modifier section
 router.put('/:associationId/sections/:sectionId',
   authenticate,
@@ -130,7 +140,7 @@ router.put('/:associationId/sections/:sectionId',
 router.put('/:associationId/sections/:sectionId/bureau',
   authenticate,
   validateAssociationId,
-  requireAssociationPermission('associationId', 'central_board'),
+  requireAssociationPermission('associationId', ['admin_association', 'central_board']), // ← CORRECTION
   sectionController.updateBureauSection
 );
 
@@ -149,6 +159,7 @@ router.delete('/:associationId/sections/:sectionId',
   requireAssociationPermission('associationId', 'president'),
   sectionController.deleteSection
 );
+
 
 // Rapport comparatif sections
 router.get('/:associationId/sections-comparison',
@@ -183,6 +194,15 @@ router.get('/:associationId/members',
   requireAssociationPermission('associationId', 'member'),
   memberController.listMembers
 );
+
+// 2️⃣ MEMBRES D'UNE SECTION
+router.get('/:associationId/sections/:sectionId/members',
+  authenticate,
+  validateAssociationId,
+  requireAssociationPermission('associationId', 'member'),
+  memberController.getSectionMembers
+);
+
 
 // Dashboard membre personnel
 router.get('/:associationId/my-dashboard',

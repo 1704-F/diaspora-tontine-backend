@@ -255,14 +255,22 @@ const requireAssociationPermission = (associationParam, requiredRoleOrRoles) => 
       const associationId = req.params[associationParam];
       const membership = await AssociationMember.findOne({
         where: { userId: req.user.id, associationId, status: 'active' }
-        // Supprimer l'include - pas nécessaire ici
       });
 
       if (!membership) {
         return res.status(403).json({ error: 'Accès association non autorisé' });
       }
 
-      const userRoles = membership.roles || [];
+      // 🔧 CORRECTION : Gérer string simple OU JSON array
+      let userRoles = [];
+      if (membership.roles) {
+        try {
+          userRoles = JSON.parse(membership.roles);
+        } catch (error) {
+          // Si pas un JSON, traiter comme string simple
+          userRoles = [membership.roles];
+        }
+      }
       
       // ADMIN a TOUS les droits
       if (userRoles.includes('admin_association')) {
@@ -279,7 +287,7 @@ const requireAssociationPermission = (associationParam, requiredRoleOrRoles) => 
 
       return res.status(403).json({ error: 'Permissions insuffisantes' });
     } catch (error) {
-      console.error('Erreur middleware permission:', error); // Ajouter ce log
+      console.error('Erreur middleware permission:', error);
       return res.status(500).json({ error: 'Erreur vérification permissions' });
     }
   };

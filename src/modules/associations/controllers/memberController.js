@@ -1412,6 +1412,158 @@ class MemberController {
       });
     }
   }
+
+  async getSectionMembers(req, res) {
+  try {
+    const { associationId, sectionId } = req.params;
+    const { page = 1, limit = 50, search, status = 'all', memberType } = req.query;
+
+    // Vérifier accès association
+    const membership = await AssociationMember.findOne({
+      where: {
+        userId: req.user.id,
+        associationId,
+        status: 'active'
+      }
+    });
+
+    if (!membership && req.user.role !== 'super_admin') {
+      return res.status(403).json({
+        error: 'Accès association non autorisé',
+        code: 'ASSOCIATION_ACCESS_DENIED'
+      });
+    }
+
+    // Vérifier que la section existe
+    const section = await Section.findOne({
+      where: { id: sectionId, associationId }
+    });
+
+    if (!section) {
+      return res.status(404).json({
+        error: 'Section introuvable',
+        code: 'SECTION_NOT_FOUND'
+      });
+    }
+
+    // Construire filtres
+    const whereClause = { 
+      associationId,
+      sectionId: sectionId
+    };
+    if (memberType && memberType !== 'all') whereClause.memberType = memberType;
+    if (status !== 'all') whereClause.status = status;
+
+    // Pagination
+    const offset = (page - 1) * limit;
+
+    // Inclusions avec recherche
+    const includes = [
+      {
+        model: User,
+        as: 'user',
+        attributes: [
+          'id',
+          'fullName', 
+          'phoneNumber',
+          'profilePicture',
+          'createdAt'
+        ],
+        ...(search && {
+          where: {
+            [Op.or]: [
+              { fullName: { [Op.iLike]: `%${search}%` } },
+              { phoneNumber: { [Op.iLike]: `%${search}%` } }
+            ]
+          }
+        })
+      },
+      {
+        model: Section,
+        as: 'section',
+        attributes: ['id', 'name', 'country', 'city']
+      }
+    ];
+
+    // Récupérer membres de la section
+    const { rows: members, count } = await AssociationMember.findAndCountAll({
+      where: whereClause,
+      include: includes,
+      limit: parseInt(limit),
+      offset: parseInt(offset),
+      order: [['created_at', 'DESC']]
+    });
+
+    // Formatter les données pour le frontend
+    const formattedMembers = members.map(member => {
+      // Calculer contribution totale (simulation)
+      const joinDate = new Date(member.joinDate);
+      const monthsActive = Math.max(1, Math.floor((Date.now() - joinDate.getTime()) / (1000 * 60 * 60 * 24 * 30)));
+      
+      // Récupérer montant cotisation selon type
+      const association = section.association || {};
+      const memberTypes = association.memberTypes || {};
+      const memberTypeData = memberTypes[member.memberType] || {};
+      const monthlyCotisation = memberTypeData.monthlyAmount || 0;
+      
+      const totalContributed = monthsActive * monthlyCotisation;
+      
+      // Déterminer statut cotisation (simulation basée sur dernière activité)
+      let contributionStatus = 'uptodate';
+      if (member.lastPaymentDate) {
+        const daysSinceLastPayment = Math.floor((Date.now() - new Date(member.lastPaymentDate).getTime()) / (1000 * 60 * 60 * 24));
+        if (daysSinceLastPayment > 60) contributionStatus = 'defaulting';
+        else if (daysSinceLastPayment > 30) contributionStatus = 'late';
+      }
+
+      return {
+        id: member.id,
+        userId: member.userId,
+        firstName: member.user.fullName.split(' ')[0] || '',
+        lastName: member.user.fullName.split(' ').slice(1).join(' ') || '',
+        email: member.user.email || member.user.phoneNumber + '@temp.local',
+        phoneNumber: member.user.phoneNumber,
+        memberType: member.memberType,
+        status: member.status,
+        joinDate: member.joinDate,
+        lastActiveDate: member.lastPaymentDate,
+        totalContributed: totalContributed.toString(),
+        contributionStatus,
+        roles: member.roles || []
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        members: formattedMembers,
+        pagination: {
+          page: parseInt(page),
+          limit: parseInt(limit),
+          total: count,
+          pages: Math.ceil(count / limit)
+        },
+        section: {
+          id: section.id,
+          name: section.name,
+          country: section.country,
+          city: section.city,
+          currency: section.currency
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Erreur récupération membres section:', error);
+    res.status(500).json({
+      error: 'Erreur récupération membres section',
+      code: 'SECTION_MEMBERS_FETCH_ERROR',
+      details: error.message
+    });
+  }
+}
+
+
 }
 
 module.exports = new MemberController();
