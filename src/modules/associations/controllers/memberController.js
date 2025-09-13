@@ -13,14 +13,34 @@ class MemberController {
   async addMember(req, res) {
     try {
       const { associationId } = req.params;
+
+      console.log("--- DEBUG BACKEND ---");
+      console.log("req.body reçu:", req.body);
+      console.log("associationId:", associationId);
       const {
+        // Soit userId direct (si utilisateur existe déjà)
         userId,
+        // Soit données pour créer/trouver utilisateur
+        firstName,
+        lastName,
+        phoneNumber,
+        email,
+        // Données membership
         memberType,
         sectionId,
         cotisationAmount,
         autoPaymentEnabled = false,
         paymentMethodId,
       } = req.body;
+
+      console.log("Données extraites:", {
+        userId,
+        firstName,
+        lastName,
+        phoneNumber,
+        email,
+        memberType,
+      });
 
       // Vérifier permissions (bureau central ou responsable section)
       const requesterMembership = await AssociationMember.findOne({
@@ -31,15 +51,14 @@ class MemberController {
         },
       });
 
+      const userRoles = requesterMembership?.roles || [];
       const canAddMember =
-        requesterMembership &&
-        ([
-          "president",
-          "central_board",
-          "secretaire",
-          "responsable_section",
-        ].includes(requesterMembership.roles?.[0]) ||
-          req.user.role === "super_admin");
+        userRoles.includes("admin_association") ||
+        userRoles.includes("president") ||
+        userRoles.includes("central_board") ||
+        userRoles.includes("secretaire") ||
+        userRoles.includes("responsable_section") ||
+        req.user.role === "super_admin";
 
       if (!canAddMember) {
         return res.status(403).json({
@@ -48,19 +67,55 @@ class MemberController {
         });
       }
 
-      // Vérifier que l'utilisateur à ajouter existe
-      const targetUser = await User.findByPk(userId);
-      if (!targetUser) {
-        return res.status(404).json({
-          error: "Utilisateur introuvable",
-          code: "USER_NOT_FOUND",
+      // NOUVELLE LOGIQUE : Créer ou trouver l'utilisateur
+      let targetUser;
+
+      if (userId) {
+        // Cas 1 : userId fourni directement
+        targetUser = await User.findByPk(userId);
+        if (!targetUser) {
+          return res.status(404).json({
+            error: "Utilisateur introuvable",
+            code: "USER_NOT_FOUND",
+          });
+        }
+      } else if (firstName && lastName && phoneNumber) {
+        // Cas 2 : Créer/trouver utilisateur par ses données
+
+        // D'abord chercher s'il existe déjà
+        targetUser = await User.findOne({
+          where: { phoneNumber: phoneNumber.trim() },
+        });
+
+        if (!targetUser) {
+          // Créer nouvel utilisateur
+          targetUser = await User.create({
+            firstName: firstName.trim(),
+            lastName: lastName.trim(),
+            phoneNumber: phoneNumber.trim(),
+            email: email ? email.trim() : null,
+            status: "pending_verification",
+          });
+
+          console.log(
+            `Nouvel utilisateur créé: ${targetUser.firstName} ${targetUser.lastName} (${targetUser.phoneNumber})`
+          );
+        } else {
+          console.log(
+            `Utilisateur existant trouvé: ${targetUser.firstName} ${targetUser.lastName}`
+          );
+        }
+      } else {
+        return res.status(400).json({
+          error: "userId OU (firstName + lastName + phoneNumber) requis",
+          code: "MISSING_USER_DATA",
         });
       }
 
       // Vérifier qu'il n'est pas déjà membre
       const existingMembership = await AssociationMember.findOne({
         where: {
-          userId,
+          userId: targetUser.id, // Utiliser targetUser.id maintenant
           associationId,
         },
       });
@@ -108,28 +163,20 @@ class MemberController {
 
       // Créer le membre
       const member = await AssociationMember.create({
-        userId,
+        userId: targetUser.id, // Utiliser targetUser.id
         associationId,
         sectionId,
         memberType,
-        status: "active", // Directement actif si ajouté par bureau
+        status: "active",
         cotisationAmount: finalCotisationAmount,
         autoPaymentEnabled,
         paymentMethodId,
         joinDate: new Date(),
         approvedDate: new Date(),
         approvedBy: req.user.id,
-        roles: [], // Pas de rôle spécial par défaut
+        roles: [],
         permissions: memberTypeExists.permissions || [],
       });
-
-      // Mettre à jour compteur membres association
-      await Association.increment("membersCount", {
-        where: { id: associationId },
-      });
-      if (sectionId) {
-        await Section.increment("membersCount", { where: { id: sectionId } });
-      }
 
       // Charger membre complet pour retour
       const memberComplete = await AssociationMember.findByPk(member.id, {
@@ -137,7 +184,7 @@ class MemberController {
           {
             model: User,
             as: "user",
-            attributes: ["id", "fullName", "phoneNumber", "profilePicture"],
+            attributes: ["id", "firstName", "lastName", "phoneNumber", "email"],
           },
           {
             model: Section,
@@ -163,147 +210,186 @@ class MemberController {
     }
   }
 
-  // 📋 LISTER MEMBRES ASSOCIATION
-  async listMembers(req, res) {
-    try {
-      const { associationId } = req.params;
-      const {
-        sectionId,
-        memberType,
-        status = "active",
-        page = 1,
-        limit = 50,
-        search,
-      } = req.query;
+// 📋 LISTER MEMBRES ASSOCIATION
+async listMembers(req, res) {
+  try {
+    const { associationId } = req.params;
+    const {
+      sectionId,
+      memberType,
+      status = "all",
+      page = 1,
+      limit = 50,
+      search,
+    } = req.query;
 
-      // Vérifier accès association
-      const membership = await AssociationMember.findOne({
-        where: {
-          userId: req.user.id,
-          associationId,
-          status: "active",
-        },
-        include: [{ model: Association, as: "association" }],
-      });
+    // Vérifier accès association
+    const membership = await AssociationMember.findOne({
+      where: {
+        userId: req.user.id,
+        associationId,
+        status: "active",
+      },
+      include: [{ model: Association, as: "association" }],
+    });
 
-      if (!membership && req.user.role !== "super_admin") {
-        return res.status(403).json({
-          error: "Accès association non autorisé",
-          code: "ASSOCIATION_ACCESS_DENIED",
-        });
-      }
-
-      // Vérifier permission voir liste membres
-      const canViewMembers =
-        this.checkPermission(membership, "view_member_list") ||
-        req.user.role === "super_admin";
-
-      if (!canViewMembers) {
-        return res.status(403).json({
-          error: "Permission voir membres non accordée",
-          code: "VIEW_MEMBERS_DENIED",
-        });
-      }
-
-      // Construire filtres
-      const whereClause = { associationId };
-      if (sectionId) whereClause.sectionId = sectionId;
-      if (memberType) whereClause.memberType = memberType;
-      if (status !== "all") whereClause.status = status;
-
-      // Pagination
-      const offset = (page - 1) * limit;
-
-      // Inclusions
-      const includes = [
-        {
-          model: User,
-          as: "user",
-          attributes: [
-            "id",
-            "fullName",
-            "phoneNumber",
-            "profilePicture",
-            "createdAt",
-          ],
-          ...(search && {
-            where: {
-              [Op.or]: [
-                { fullName: { [Op.iLike]: `%${search}%` } },
-                { phoneNumber: { [Op.iLike]: `%${search}%` } },
-              ],
-            },
-          }),
-        },
-        {
-          model: Section,
-          as: "section",
-          attributes: ["id", "name", "country", "city"],
-        },
-      ];
-
-      // Récupérer membres
-      const { rows: members, count } = await AssociationMember.findAndCountAll({
-        where: whereClause,
-        include: includes,
-        limit: parseInt(limit),
-        offset: parseInt(offset),
-        order: [["created_at", "DESC"]],
-      });
-
-      // Ajouter statistiques membres si permission finances
-      const canViewFinances =
-        this.checkPermission(membership, "view_finances") ||
-        req.user.role === "super_admin";
-
-      let membersWithStats = members;
-      if (canViewFinances) {
-        membersWithStats = await Promise.all(
-          members.map(async (member) => {
-            const [totalContributed, isCurrentPaid] = await Promise.all([
-              member.getTotalContributions(),
-              member.isCurrentMonthPaid(),
-            ]);
-
-            return {
-              ...member.toJSON(),
-              stats: {
-                totalContributed,
-                isCurrentMonthPaid: isCurrentPaid,
-                seniority: member.getTotalSeniority(),
-              },
-            };
-          })
-        );
-      }
-
-      res.json({
-        success: true,
-        data: {
-          members: membersWithStats,
-          pagination: {
-            page: parseInt(page),
-            limit: parseInt(limit),
-            total: count,
-            pages: Math.ceil(count / limit),
-          },
-          filters: {
-            sectionId,
-            memberType,
-            status,
-            search,
-          },
-        },
-      });
-    } catch (error) {
-      console.error("Erreur liste membres:", error);
-      res.status(500).json({
-        error: "Erreur récupération membres",
-        code: "MEMBERS_FETCH_ERROR",
-        details: error.message,
+    if (!membership && req.user.role !== "super_admin") {
+      return res.status(403).json({
+        error: "Accès association non autorisé",
+        code: "ASSOCIATION_ACCESS_DENIED",
       });
     }
+
+    // Vérifier permission voir liste membres
+    const userRoles = membership?.roles || [];
+    const canViewMembers =
+      userRoles.includes("admin_association") ||
+      userRoles.includes("president") ||
+      userRoles.includes("central_board") ||
+      userRoles.includes("secretaire") ||
+      userRoles.includes("responsable_section") ||
+      req.user.role === "super_admin";
+
+    if (!canViewMembers) {
+      return res.status(403).json({
+        error: "Permission voir membres non accordée",
+        code: "VIEW_MEMBERS_DENIED",
+      });
+    }
+
+    // Construire filtres
+    const whereClause = { associationId };
+    if (sectionId) whereClause.sectionId = sectionId;
+    if (memberType) whereClause.memberType = memberType;
+    if (status !== "all") whereClause.status = status;
+
+    // Pagination
+    const offset = (page - 1) * limit;
+
+    // Inclusions avec les vrais noms de colonnes
+    const includes = [
+      {
+        model: User,
+        as: "user",
+        attributes: [
+          "id",
+          "first_name",
+          "last_name",
+          "phone_number",
+          "email",
+          "created_at",
+        ],
+        ...(search && {
+          where: {
+            [Op.or]: [
+              { first_name: { [Op.iLike]: `%${search}%` } },
+              { last_name: { [Op.iLike]: `%${search}%` } },
+              { phone_number: { [Op.iLike]: `%${search}%` } },
+            ],
+          },
+        }),
+      },
+      {
+        model: Section,
+        as: "section",
+        attributes: ["id", "name", "country", "city"],
+      },
+    ];
+
+    // Récupérer membres
+    const { rows: members, count } = await AssociationMember.findAndCountAll({
+      where: whereClause,
+      include: includes,
+      limit: parseInt(limit),
+      offset: parseInt(offset),
+      order: [["created_at", "DESC"]],
+    });
+
+    // Vérifier permission finances
+    const canViewFinances =
+      userRoles.includes("admin_association") ||
+      userRoles.includes("president") ||
+      userRoles.includes("tresorier") ||
+      req.user.role === "super_admin";
+
+    // Formater les membres pour le frontend
+    const formattedMembers = members.map(member => {
+      const memberData = {
+        id: member.id,
+        userId: member.userId,
+        user: {
+          id: member.user.id,
+          firstName: member.user.first_name,
+          lastName: member.user.last_name,
+          phoneNumber: member.user.phone_number,
+          email: member.user.email,
+        },
+        memberType: member.memberType,
+        status: member.status,
+        joinDate: member.joinDate,
+        sectionId: member.sectionId,
+        section: member.section ? {
+          id: member.section.id,
+          name: member.section.name,
+          country: member.section.country,
+          city: member.section.city
+        } : null,
+        roles: member.roles || [],
+        cotisationAmount: member.cotisationAmount,
+        // Données simulées pour compatibilité frontend
+        totalContributed: "0",
+        contributionStatus: "uptodate",
+        ancienneteTotal: 0
+      };
+
+      // Ajouter calculs si permission finances
+      if (canViewFinances) {
+        const joinDate = new Date(member.joinDate);
+        const monthsActive = Math.max(1, Math.floor((Date.now() - joinDate.getTime()) / (1000 * 60 * 60 * 24 * 30)));
+        memberData.totalContributed = (monthsActive * (member.cotisationAmount || 0)).toString();
+        memberData.ancienneteTotal = monthsActive;
+        
+        // Simuler statut contribution basé sur ancienneté
+        const daysSinceJoin = Math.floor((Date.now() - joinDate.getTime()) / (1000 * 60 * 60 * 24));
+        if (daysSinceJoin > 90) {
+          memberData.contributionStatus = "very_late";
+        } else if (daysSinceJoin > 60) {
+          memberData.contributionStatus = "late";
+        } else {
+          memberData.contributionStatus = "uptodate";
+        }
+      }
+
+      return memberData;
+    });
+
+    res.json({
+      success: true,
+      data: {
+        members: formattedMembers,
+        pagination: {
+          page: parseInt(page),
+          limit: parseInt(limit),
+          total: count,
+          pages: Math.ceil(count / limit),
+        },
+        filters: {
+          sectionId,
+          memberType,
+          status,
+          search,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Erreur liste membres:", error);
+    res.status(500).json({
+      error: "Erreur récupération membres",
+      code: "MEMBERS_FETCH_ERROR",
+      details: error.message,
+    });
   }
+}
 
   // 💰 PAYER COTISATION (CB PRIORITAIRE)
   async payCotisation(req, res) {
@@ -380,23 +466,23 @@ class MemberController {
 
       try {
         // Traitement paiement Stripe
-       const paymentIntent = await stripe.paymentIntents.create({
-  amount: Math.round(amount * 100),
-  currency: 'eur',
-  payment_method: paymentMethodId,
-  confirm: true,
-  automatic_payment_methods: {
-    enabled: true,
-    allow_redirects: 'never'  // ✅ Pas de redirect = pas de return_url nécessaire
-  },
-  metadata: {
-    associationId: String(associationId),
-    memberId: String(membership.id),
-    type: 'cotisation',
-    month: String(month),
-    year: String(year)
-  }
-});
+        const paymentIntent = await stripe.paymentIntents.create({
+          amount: Math.round(amount * 100),
+          currency: "eur",
+          payment_method: paymentMethodId,
+          confirm: true,
+          automatic_payment_methods: {
+            enabled: true,
+            allow_redirects: "never", // ✅ Pas de redirect = pas de return_url nécessaire
+          },
+          metadata: {
+            associationId: String(associationId),
+            memberId: String(membership.id),
+            type: "cotisation",
+            month: String(month),
+            year: String(year),
+          },
+        });
 
         // Mettre à jour transaction avec résultat Stripe
         await transaction.update({
@@ -1414,156 +1500,168 @@ class MemberController {
   }
 
   async getSectionMembers(req, res) {
-  try {
-    const { associationId, sectionId } = req.params;
-    const { page = 1, limit = 50, search, status = 'all', memberType } = req.query;
+    try {
+      const { associationId, sectionId } = req.params;
+      const {
+        page = 1,
+        limit = 50,
+        search,
+        status = "all",
+        memberType,
+      } = req.query;
 
-    // Vérifier accès association
-    const membership = await AssociationMember.findOne({
-      where: {
-        userId: req.user.id,
-        associationId,
-        status: 'active'
-      }
-    });
-
-    if (!membership && req.user.role !== 'super_admin') {
-      return res.status(403).json({
-        error: 'Accès association non autorisé',
-        code: 'ASSOCIATION_ACCESS_DENIED'
-      });
-    }
-
-    // Vérifier que la section existe
-    const section = await Section.findOne({
-      where: { id: sectionId, associationId }
-    });
-
-    if (!section) {
-      return res.status(404).json({
-        error: 'Section introuvable',
-        code: 'SECTION_NOT_FOUND'
-      });
-    }
-
-    // Construire filtres
-    const whereClause = { 
-      associationId,
-      sectionId: sectionId
-    };
-    if (memberType && memberType !== 'all') whereClause.memberType = memberType;
-    if (status !== 'all') whereClause.status = status;
-
-    // Pagination
-    const offset = (page - 1) * limit;
-
-    // Inclusions avec recherche
-    const includes = [
-      {
-        model: User,
-        as: 'user',
-        attributes: [
-          'id',
-          'fullName', 
-          'phoneNumber',
-          'profilePicture',
-          'createdAt'
-        ],
-        ...(search && {
-          where: {
-            [Op.or]: [
-              { fullName: { [Op.iLike]: `%${search}%` } },
-              { phoneNumber: { [Op.iLike]: `%${search}%` } }
-            ]
-          }
-        })
-      },
-      {
-        model: Section,
-        as: 'section',
-        attributes: ['id', 'name', 'country', 'city']
-      }
-    ];
-
-    // Récupérer membres de la section
-    const { rows: members, count } = await AssociationMember.findAndCountAll({
-      where: whereClause,
-      include: includes,
-      limit: parseInt(limit),
-      offset: parseInt(offset),
-      order: [['created_at', 'DESC']]
-    });
-
-    // Formatter les données pour le frontend
-    const formattedMembers = members.map(member => {
-      // Calculer contribution totale (simulation)
-      const joinDate = new Date(member.joinDate);
-      const monthsActive = Math.max(1, Math.floor((Date.now() - joinDate.getTime()) / (1000 * 60 * 60 * 24 * 30)));
-      
-      // Récupérer montant cotisation selon type
-      const association = section.association || {};
-      const memberTypes = association.memberTypes || {};
-      const memberTypeData = memberTypes[member.memberType] || {};
-      const monthlyCotisation = memberTypeData.monthlyAmount || 0;
-      
-      const totalContributed = monthsActive * monthlyCotisation;
-      
-      // Déterminer statut cotisation (simulation basée sur dernière activité)
-      let contributionStatus = 'uptodate';
-      if (member.lastPaymentDate) {
-        const daysSinceLastPayment = Math.floor((Date.now() - new Date(member.lastPaymentDate).getTime()) / (1000 * 60 * 60 * 24));
-        if (daysSinceLastPayment > 60) contributionStatus = 'defaulting';
-        else if (daysSinceLastPayment > 30) contributionStatus = 'late';
-      }
-
-      return {
-        id: member.id,
-        userId: member.userId,
-        firstName: member.user.fullName.split(' ')[0] || '',
-        lastName: member.user.fullName.split(' ').slice(1).join(' ') || '',
-        email: member.user.email || member.user.phoneNumber + '@temp.local',
-        phoneNumber: member.user.phoneNumber,
-        memberType: member.memberType,
-        status: member.status,
-        joinDate: member.joinDate,
-        lastActiveDate: member.lastPaymentDate,
-        totalContributed: totalContributed.toString(),
-        contributionStatus,
-        roles: member.roles || []
-      };
-    });
-
-    res.json({
-      success: true,
-      data: {
-        members: formattedMembers,
-        pagination: {
-          page: parseInt(page),
-          limit: parseInt(limit),
-          total: count,
-          pages: Math.ceil(count / limit)
+      // Vérifier accès association
+      const membership = await AssociationMember.findOne({
+        where: {
+          userId: req.user.id,
+          associationId,
+          status: "active",
         },
-        section: {
-          id: section.id,
-          name: section.name,
-          country: section.country,
-          city: section.city,
-          currency: section.currency
-        }
+      });
+
+      if (!membership && req.user.role !== "super_admin") {
+        return res.status(403).json({
+          error: "Accès association non autorisé",
+          code: "ASSOCIATION_ACCESS_DENIED",
+        });
       }
-    });
 
-  } catch (error) {
-    console.error('Erreur récupération membres section:', error);
-    res.status(500).json({
-      error: 'Erreur récupération membres section',
-      code: 'SECTION_MEMBERS_FETCH_ERROR',
-      details: error.message
-    });
+      // Vérifier que la section existe
+      const section = await Section.findOne({
+        where: { id: sectionId, associationId },
+      });
+
+      if (!section) {
+        return res.status(404).json({
+          error: "Section introuvable",
+          code: "SECTION_NOT_FOUND",
+        });
+      }
+
+      // Construire filtres
+      const whereClause = {
+        associationId,
+        sectionId: sectionId,
+      };
+      if (memberType && memberType !== "all")
+        whereClause.memberType = memberType;
+      if (status !== "all") whereClause.status = status;
+
+      // Pagination
+      const offset = (page - 1) * limit;
+
+      // Inclusions avec recherche
+      const includes = [
+        {
+          model: User,
+          as: "user",
+          attributes: [
+            "id",
+            "fullName",
+            "phoneNumber",
+            "profilePicture",
+            "createdAt",
+          ],
+          ...(search && {
+            where: {
+              [Op.or]: [
+                { fullName: { [Op.iLike]: `%${search}%` } },
+                { phoneNumber: { [Op.iLike]: `%${search}%` } },
+              ],
+            },
+          }),
+        },
+        {
+          model: Section,
+          as: "section",
+          attributes: ["id", "name", "country", "city"],
+        },
+      ];
+
+      // Récupérer membres de la section
+      const { rows: members, count } = await AssociationMember.findAndCountAll({
+        where: whereClause,
+        include: includes,
+        limit: parseInt(limit),
+        offset: parseInt(offset),
+        order: [["created_at", "DESC"]],
+      });
+
+      // Formatter les données pour le frontend
+      const formattedMembers = members.map((member) => {
+        // Calculer contribution totale (simulation)
+        const joinDate = new Date(member.joinDate);
+        const monthsActive = Math.max(
+          1,
+          Math.floor(
+            (Date.now() - joinDate.getTime()) / (1000 * 60 * 60 * 24 * 30)
+          )
+        );
+
+        // Récupérer montant cotisation selon type
+        const association = section.association || {};
+        const memberTypes = association.memberTypes || {};
+        const memberTypeData = memberTypes[member.memberType] || {};
+        const monthlyCotisation = memberTypeData.monthlyAmount || 0;
+
+        const totalContributed = monthsActive * monthlyCotisation;
+
+        // Déterminer statut cotisation (simulation basée sur dernière activité)
+        let contributionStatus = "uptodate";
+        if (member.lastPaymentDate) {
+          const daysSinceLastPayment = Math.floor(
+            (Date.now() - new Date(member.lastPaymentDate).getTime()) /
+              (1000 * 60 * 60 * 24)
+          );
+          if (daysSinceLastPayment > 60) contributionStatus = "defaulting";
+          else if (daysSinceLastPayment > 30) contributionStatus = "late";
+        }
+
+        return {
+          id: member.id,
+          userId: member.userId,
+          firstName: member.user.fullName.split(" ")[0] || "",
+          lastName: member.user.fullName.split(" ").slice(1).join(" ") || "",
+          email: member.user.email || member.user.phoneNumber + "@temp.local",
+          phoneNumber: member.user.phoneNumber,
+          memberType: member.memberType,
+          status: member.status,
+          joinDate: member.joinDate,
+          lastActiveDate: member.lastPaymentDate,
+          totalContributed: totalContributed.toString(),
+          contributionStatus,
+          roles: member.roles || [],
+        };
+      });
+
+      res.json({
+        success: true,
+        data: {
+          members: formattedMembers,
+          pagination: {
+            page: parseInt(page),
+            limit: parseInt(limit),
+            total: count,
+            pages: Math.ceil(count / limit),
+          },
+          section: {
+            id: section.id,
+            name: section.name,
+            country: section.country,
+            city: section.city,
+            currency: section.currency,
+          },
+        },
+      });
+    } catch (error) {
+      console.error("Erreur récupération membres section:", error);
+      res.status(500).json({
+        error: "Erreur récupération membres section",
+        code: "SECTION_MEMBERS_FETCH_ERROR",
+        details: error.message,
+      });
+    }
   }
-}
-
-
 }
 
 module.exports = new MemberController();

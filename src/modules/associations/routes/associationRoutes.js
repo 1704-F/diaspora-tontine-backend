@@ -183,7 +183,7 @@ router.post('/:associationId/sections/:sectionId/transfer-member',
 router.post('/:associationId/members',
   authenticate,
   validateAssociationId,
-  requireAssociationPermission('associationId', 'secretaire'),
+  requireAssociationPermission('associationId', 'admin_association'),
   memberController.addMember
 );
 

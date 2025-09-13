@@ -253,42 +253,88 @@ const requireAssociationPermission = (associationParam, requiredRoleOrRoles) => 
   return async (req, res, next) => {
     try {
       const associationId = req.params[associationParam];
+      
+      console.log(`🔍 Vérification permission pour association ${associationId}, user ${req.user.id}`);
+      
       const membership = await AssociationMember.findOne({
         where: { userId: req.user.id, associationId, status: 'active' }
       });
 
       if (!membership) {
-        return res.status(403).json({ error: 'Accès association non autorisé' });
+        console.log('❌ Aucun membership trouvé');
+        return res.status(403).json({ 
+          error: 'Accès association non autorisé',
+          code: 'NO_MEMBERSHIP'
+        });
       }
 
-      // 🔧 CORRECTION : Gérer string simple OU JSON array
+      console.log('📋 Membership trouvé:', {
+        id: membership.id,
+        roles: membership.roles,
+        memberType: membership.memberType
+      });
+
+      // 🔧 CORRECTION : Gestion robuste des rôles
       let userRoles = [];
+      
       if (membership.roles) {
-        try {
-          userRoles = JSON.parse(membership.roles);
-        } catch (error) {
-          // Si pas un JSON, traiter comme string simple
-          userRoles = [membership.roles];
+        if (typeof membership.roles === 'string') {
+          try {
+            // Essayer de parser comme JSON
+            userRoles = JSON.parse(membership.roles);
+            console.log('✅ Rôles parsés depuis JSON:', userRoles);
+          } catch (error) {
+            // Si pas un JSON, traiter comme string simple
+            userRoles = [membership.roles];
+            console.log('✅ Rôles traités comme string:', userRoles);
+          }
+        } else if (Array.isArray(membership.roles)) {
+          // Déjà un array
+          userRoles = membership.roles;
+          console.log('✅ Rôles déjà en array:', userRoles);
         }
       }
-      
+
+      // Vérifier si pas de rôles = membre standard
+      if (userRoles.length === 0) {
+        userRoles = ['member'];
+        console.log('⚠️ Aucun rôle spécifique, assignation membre standard');
+      }
+
+      console.log('🎭 Rôles utilisateur finaux:', userRoles);
+
       // ADMIN a TOUS les droits
       if (userRoles.includes('admin_association')) {
+        console.log('👑 Admin détecté - accès autorisé');
         return next();
       }
 
       // Pour les autres, vérifier rôles requis
       const requiredRoles = Array.isArray(requiredRoleOrRoles) ? requiredRoleOrRoles : [requiredRoleOrRoles];
+      console.log('🎯 Rôles requis:', requiredRoles);
+      
       const hasRequiredRole = requiredRoles.some(role => userRoles.includes(role));
+      console.log('🔐 A le rôle requis:', hasRequiredRole);
 
       if (hasRequiredRole) {
+        console.log('✅ Permission accordée');
         return next();
       }
 
-      return res.status(403).json({ error: 'Permissions insuffisantes' });
+      console.log('❌ Permission refusée');
+      return res.status(403).json({ 
+        error: 'Permissions insuffisantes',
+        code: 'INSUFFICIENT_PERMISSIONS',
+        required: requiredRoles,
+        current: userRoles
+      });
+      
     } catch (error) {
-      console.error('Erreur middleware permission:', error);
-      return res.status(500).json({ error: 'Erreur vérification permissions' });
+      console.error('🚨 Erreur middleware permission:', error);
+      return res.status(500).json({ 
+        error: 'Erreur vérification permissions',
+        code: 'PERMISSION_CHECK_ERROR'
+      });
     }
   };
 };

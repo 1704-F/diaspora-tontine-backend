@@ -3,9 +3,72 @@ const {
   Section,
   AssociationMember,
   User,
-  Transaction,
+  Transaction
 } = require("../../../models");
 const { Op } = require("sequelize");
+
+// Ajouter cette fonction AVANT la classe SectionController
+async function updateMemberRoles(associationId, sectionId, newBureau) {
+  try {
+    console.log('Mise à jour des rôles membres...');
+    
+    // Récupérer tous les membres de la section
+    const members = await AssociationMember.findAll({
+      where: { associationId, sectionId }
+    });
+
+    console.log(`Trouvé ${members.length} membres à mettre à jour`);
+
+    // Réinitialiser tous les rôles bureau de la section
+    for (const member of members) {
+      let roles = member.roles || [];
+      
+      // Retirer les anciens rôles section
+      const oldRolesCount = roles.length;
+      roles = roles.filter(role => 
+        !['responsable_section', 'secretaire_section', 'tresorier_section'].includes(role)
+      );
+      
+      if (oldRolesCount !== roles.length) {
+        console.log(`Suppression rôles section pour membre ${member.userId}`);
+        await member.update({ roles });
+      }
+    }
+
+    // Assigner nouveaux rôles
+    const assignments = [
+      { role: "responsable_section", userId: newBureau.responsable?.userId },
+      { role: "secretaire_section", userId: newBureau.secretaire?.userId },
+      { role: "tresorier_section", userId: newBureau.tresorier?.userId },
+    ];
+
+    for (const assignment of assignments) {
+      if (assignment.userId) {
+        console.log(`Assignation rôle ${assignment.role} à user ${assignment.userId}`);
+        
+        const member = await AssociationMember.findOne({
+          where: { userId: assignment.userId, associationId, sectionId }
+        });
+        
+        if (member) {
+          const roles = [...(member.roles || [])];
+          if (!roles.includes(assignment.role)) {
+            roles.push(assignment.role);
+            await member.update({ roles });
+            console.log(`Rôle ${assignment.role} assigné avec succès`);
+          }
+        } else {
+          console.warn(`Membre ${assignment.userId} non trouvé dans la section ${sectionId}`);
+        }
+      }
+    }
+
+    console.log('Mise à jour des rôles terminée avec succès');
+  } catch (error) {
+    console.error("Erreur mise à jour rôles membres:", error);
+    throw error;
+  }
+}
 
 class SectionController {
   // 🏗️ CRÉER SECTION
@@ -273,17 +336,19 @@ class SectionController {
         },
       });
 
-      const canManageBureau =
-        (membership &&
-          ["president", "central_board"].includes(membership.roles?.[0])) ||
-        req.user.role === "super_admin";
+     const userRoles = membership?.roles || [];
+const canManageBureau =
+  userRoles.includes("admin_association") ||
+  userRoles.includes("president") ||
+  userRoles.includes("central_board") ||
+  req.user.role === "super_admin";
 
-      if (!canManageBureau) {
-        return res.status(403).json({
-          error: "Seul le bureau central peut gérer le bureau section",
-          code: "CENTRAL_BOARD_ONLY",
-        });
-      }
+if (!canManageBureau) {
+  return res.status(403).json({
+    error: "Seul le bureau central peut gérer le bureau section",
+    code: "CENTRAL_BOARD_ONLY",
+  });
+}
 
       // Vérifier que tous les utilisateurs sont membres de la section
       const bureauUserIds = [
@@ -325,7 +390,7 @@ class SectionController {
       );
 
       // Mettre à jour rôles des membres concernés
-      await this.updateMemberRoles(associationId, sectionId, newBureau);
+      await updateMemberRoles(associationId, sectionId, newBureau);
 
       res.json({
         success: true,
@@ -659,61 +724,7 @@ class SectionController {
     }
   }
 
-  // Mettre à jour rôles membres suite changement bureau
-  async updateMemberRoles(associationId, sectionId, newBureau) {
-    try {
-      // Réinitialiser tous les rôles bureau de la section
-      await AssociationMember.update(
-        {
-          roles: sequelize.fn(
-            "array_remove",
-            sequelize.fn(
-              "array_remove",
-              sequelize.fn(
-                "array_remove",
-                sequelize.col("roles"),
-                "responsable_section"
-              ),
-              "secretaire_section"
-            ),
-            "tresorier_section"
-          ),
-        },
-        { where: { associationId, sectionId } }
-      );
-
-      // Assigner nouveaux rôles
-      const assignments = [
-        { role: "responsable_section", userId: newBureau.responsable?.userId },
-        { role: "secretaire_section", userId: newBureau.secretaire?.userId },
-        { role: "tresorier_section", userId: newBureau.tresorier?.userId },
-      ];
-
-      for (const assignment of assignments) {
-        if (assignment.userId) {
-          await AssociationMember.update(
-            {
-              roles: sequelize.fn(
-                "array_append",
-                sequelize.col("roles"),
-                assignment.role
-              ),
-            },
-            {
-              where: {
-                userId: assignment.userId,
-                associationId,
-                sectionId,
-              },
-            }
-          );
-        }
-      }
-    } catch (error) {
-      console.error("Erreur mise à jour rôles membres:", error);
-      throw error;
-    }
-  }
+  
 
   // 📊 RAPPORT COMPARATIF SECTIONS
   async getSectionsComparison(req, res) {
