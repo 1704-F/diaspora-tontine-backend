@@ -322,90 +322,76 @@ class SectionController {
   }
 
   // 👥 ASSIGNER BUREAU SECTION
-  async updateBureauSection(req, res) {
-    try {
-      const { associationId, sectionId } = req.params;
-      const { responsable, secretaire, tresorier } = req.body;
+   async updateBureauSection(req, res) {
+  try {
+    const { associationId, sectionId } = req.params;
+    const { bureauSection } = req.body; // ✅ Récupérer bureauSection depuis le body
 
-      // Vérifier permissions (président ou bureau central)
-      const membership = await AssociationMember.findOne({
-        where: {
-          userId: req.user.id,
-          associationId,
-          status: "active",
-        },
-      });
+    console.log('Données reçues:', { bureauSection }); // Debug
 
-     const userRoles = membership?.roles || [];
-const canManageBureau =
-  userRoles.includes("admin_association") ||
-  userRoles.includes("president") ||
-  userRoles.includes("central_board") ||
-  req.user.role === "super_admin";
+    // Vérifier permissions
+    const membership = await AssociationMember.findOne({
+      where: {
+        userId: req.user.id,
+        associationId,
+        status: "active",
+      },
+    });
 
-if (!canManageBureau) {
-  return res.status(403).json({
-    error: "Seul le bureau central peut gérer le bureau section",
-    code: "CENTRAL_BOARD_ONLY",
-  });
-}
+    const userRoles = membership?.roles || [];
+    const canManageBureau =
+      userRoles.includes("admin_association") ||
+      userRoles.includes("president") ||
+      req.user.role === "super_admin";
 
-      // Vérifier que tous les utilisateurs sont membres de la section
-      const bureauUserIds = [
-        responsable?.userId,
-        secretaire?.userId,
-        tresorier?.userId,
-      ].filter(Boolean);
-
-      if (bureauUserIds.length > 0) {
-        const validMembers = await AssociationMember.count({
-          where: {
-            userId: { [Op.in]: bureauUserIds },
-            associationId,
-            sectionId,
-            status: "active",
-          },
-        });
-
-        if (validMembers !== bureauUserIds.length) {
-          return res.status(400).json({
-            error: "Tous les membres bureau doivent appartenir à cette section",
-            code: "INVALID_BUREAU_MEMBERS",
-          });
-        }
-      }
-
-      // Mettre à jour bureau section
-      const newBureau = {
-        responsable: responsable || null,
-        secretaire: secretaire || null,
-        tresorier: tresorier || null,
-        updatedAt: new Date(),
-        updatedBy: req.user.id,
-      };
-
-      await Section.update(
-        { bureauSection: newBureau },
-        { where: { id: sectionId, associationId } }
-      );
-
-      // Mettre à jour rôles des membres concernés
-      await updateMemberRoles(associationId, sectionId, newBureau);
-
-      res.json({
-        success: true,
-        message: "Bureau section mis à jour avec succès",
-        data: { bureau: newBureau },
-      });
-    } catch (error) {
-      console.error("Erreur mise à jour bureau section:", error);
-      res.status(500).json({
-        error: "Erreur mise à jour bureau section",
-        code: "BUREAU_UPDATE_ERROR",
-        details: error.message,
+    if (!canManageBureau) {
+      return res.status(403).json({
+        error: "Seul le bureau central peut gérer le bureau section",
+        code: "CENTRAL_BOARD_ONLY",
       });
     }
+
+    // Récupérer la section
+    const section = await Section.findOne({
+      where: { id: sectionId, associationId }
+    });
+
+    if (!section) {
+      return res.status(404).json({
+        error: "Section introuvable",
+        code: "SECTION_NOT_FOUND",
+      });
+    }
+
+    // Mettre à jour le bureau section
+    await section.update({
+      bureauSection: {
+        ...bureauSection,
+        updatedAt: new Date(),
+        updatedBy: req.user.id
+      }
+    });
+
+    // Récupérer la section mise à jour
+    const updatedSection = await Section.findByPk(sectionId);
+
+    res.json({
+      success: true,
+      message: "Bureau section mis à jour avec succès",
+      data: { 
+        bureau: updatedSection.bureauSection 
+      },
+    });
+
+  } catch (error) {
+    console.error("Erreur mise à jour bureau section:", error);
+    res.status(500).json({
+      error: "Erreur mise à jour bureau section",
+      code: "BUREAU_UPDATE_ERROR",
+      details: error.message,
+    });
   }
+}
 
   // 📊 STATISTIQUES SECTION
   async getSectionStats(req, res) {

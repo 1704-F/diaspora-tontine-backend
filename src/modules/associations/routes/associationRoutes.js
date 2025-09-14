@@ -212,6 +212,22 @@ router.get('/:associationId/my-dashboard',
   memberController.getMemberDashboard
 );
 
+// Obtenir détails d'un membre
+router.get('/:associationId/members/:memberId',
+  authenticate,
+  validateAssociationId,
+  requireAssociationPermission('associationId', 'member'),
+  memberController.getMember
+);
+
+// Modifier membre
+router.put('/:associationId/members/:memberId',
+  authenticate,
+  validateAssociationId,
+  requireAssociationPermission('associationId', 'admin_association'),
+  memberController.updateMember
+);
+
 // Modifier statut membre
 router.put('/:associationId/members/:memberId/status',
   authenticate,

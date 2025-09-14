@@ -53,7 +53,6 @@ async function getUserPermissions(userId, associationId) {
   }
 }
 
-
 class AssociationController {
   // 🏛️ CRÉER ASSOCIATION (avec KYB)
   async createAssociation(req, res) {
@@ -166,9 +165,12 @@ class AssociationController {
       await AssociationMember.create({
         userId: req.user.id,
         associationId: association.id,
-        memberType: "fondateur",
+        memberType: "membre_actif", // ✅ Utilise un type existant dans defaultMemberTypes
         status: "active",
-        roles: ["president"],
+        // 🎯 FIX: Donner les rôles de président ET admin
+        roles: [
+          "admin_association", // ✅ Rôle technique (accès à tout)
+        ],
         joinDate: new Date(),
         approvedDate: new Date(),
         approvedBy: req.user.id,
@@ -285,7 +287,10 @@ class AssociationController {
       // Masquer informations sensibles selon permissions
       const response = association.toJSON();
 
-      if (!checkPermission(membership, "view_finances") && req.user.role !== "super_admin") {
+      if (
+        !checkPermission(membership, "view_finances") &&
+        req.user.role !== "super_admin"
+      ) {
         delete response.totalBalance;
         delete response.monthlyRevenue;
         delete response.iban;
@@ -310,97 +315,98 @@ class AssociationController {
   }
 
   // 📝 MODIFIER ASSOCIATION
- async updateAssociation(req, res) {
-  try {
-    const { id } = req.params;
-    const { bureauCentral, isMultiSection } = req.body;
+  async updateAssociation(req, res) {
+    try {
+      const { id } = req.params;
+      const { bureauCentral, isMultiSection } = req.body;
 
-    const updates = {};
+      const updates = {};
 
-    // Traiter le bureau central si fourni
-    if (bureauCentral) {
-      const processedBureau = {};
-      
-      for (const [role, roleData] of Object.entries(bureauCentral)) {
-        if (roleData.firstName && roleData.lastName && roleData.phoneNumber) {
-          // Formater le numéro de téléphone
-          let formattedPhone = roleData.phoneNumber;
-          if (!formattedPhone.startsWith('+')) {
-            formattedPhone = '+' + formattedPhone.replace(/^0+/, '');
-          }
-          
-          // Chercher utilisateur existant
-          let user = await User.findOne({ 
-            where: { phoneNumber: formattedPhone } 
-          });
-          
-          // Si pas trouvé, créer le compte
-          if (!user) {
-            user = await User.create({
-              firstName: roleData.firstName,
-              lastName: roleData.lastName,
-              phoneNumber: formattedPhone,
-              status: 'pending_verification'
+      // Traiter le bureau central si fourni
+      if (bureauCentral) {
+        const processedBureau = {};
+
+        for (const [role, roleData] of Object.entries(bureauCentral)) {
+          if (roleData.firstName && roleData.lastName && roleData.phoneNumber) {
+            // Formater le numéro de téléphone
+            let formattedPhone = roleData.phoneNumber;
+            if (!formattedPhone.startsWith("+")) {
+              formattedPhone = "+" + formattedPhone.replace(/^0+/, "");
+            }
+
+            // Chercher utilisateur existant
+            let user = await User.findOne({
+              where: { phoneNumber: formattedPhone },
             });
-            
-            console.log(`Compte créé pour ${roleData.firstName} ${roleData.lastName} (${formattedPhone})`);
+
+            // Si pas trouvé, créer le compte
+            if (!user) {
+              user = await User.create({
+                firstName: roleData.firstName,
+                lastName: roleData.lastName,
+                phoneNumber: formattedPhone,
+                status: "pending_verification",
+              });
+
+              console.log(
+                `Compte créé pour ${roleData.firstName} ${roleData.lastName} (${formattedPhone})`
+              );
+            }
+
+            // Ajouter au bureau avec la structure attendue
+            processedBureau[role] = {
+              userId: user.id,
+              name: `${user.firstName} ${user.lastName}`,
+              role: roleData.role,
+            };
           }
-          
-          // Ajouter au bureau avec la structure attendue
-          processedBureau[role] = {
-            userId: user.id,
-            name: `${user.firstName} ${user.lastName}`,
-            role: roleData.role
-          };
         }
+
+        updates.bureauCentral = processedBureau;
       }
-      
-      updates.bureauCentral = processedBureau;
+
+      // Traiter le type d'association si fourni
+      if (typeof isMultiSection === "boolean") {
+        updates.isMultiSection = isMultiSection;
+      }
+
+      // Mettre à jour l'association
+      if (Object.keys(updates).length > 0) {
+        await Association.update(updates, { where: { id } });
+      }
+
+      res.json({
+        success: true,
+        message: "Association mise à jour avec succès",
+        updated: Object.keys(updates),
+      });
+    } catch (error) {
+      console.error("Erreur mise à jour association:", error);
+      res.status(500).json({
+        error: "Erreur mise à jour association",
+        details: error.message,
+      });
+    }
+  }
+
+  // Fonction utilitaire pour formater les numéros
+  formatPhoneNumber(phone) {
+    // Nettoyer le numéro (supprimer espaces, tirets, etc.)
+    const cleaned = phone.replace(/[\s\-\(\)]/g, "");
+
+    // Si commence par 0, remplacer selon contexte européen
+    if (cleaned.startsWith("0")) {
+      // Logique à adapter selon le pays de la section
+      return "+33" + cleaned.substring(1); // Exemple France
     }
 
-    // Traiter le type d'association si fourni
-    if (typeof isMultiSection === 'boolean') {
-      updates.isMultiSection = isMultiSection;
+    // Si déjà au format international
+    if (cleaned.startsWith("+")) {
+      return cleaned;
     }
 
-    // Mettre à jour l'association
-    if (Object.keys(updates).length > 0) {
-      await Association.update(updates, { where: { id } });
-    }
-    
-    res.json({ 
-      success: true, 
-      message: 'Association mise à jour avec succès',
-      updated: Object.keys(updates)
-    });
-    
-  } catch (error) {
-    console.error('Erreur mise à jour association:', error);
-    res.status(500).json({ 
-      error: 'Erreur mise à jour association',
-      details: error.message 
-    });
+    return "+" + cleaned;
   }
-}
-
-// Fonction utilitaire pour formater les numéros
-formatPhoneNumber(phone) {
-  // Nettoyer le numéro (supprimer espaces, tirets, etc.)
-  const cleaned = phone.replace(/[\s\-\(\)]/g, '');
-  
-  // Si commence par 0, remplacer selon contexte européen
-  if (cleaned.startsWith('0')) {
-    // Logique à adapter selon le pays de la section
-    return '+33' + cleaned.substring(1); // Exemple France
-  }
-  
-  // Si déjà au format international
-  if (cleaned.startsWith('+')) {
-    return cleaned;
-  }
-  
-  return '+' + cleaned;
-}
 
   // 📋 LISTER ASSOCIATIONS DE L'UTILISATEUR
   async listUserAssociations(req, res) {
@@ -750,7 +756,6 @@ formatPhoneNumber(phone) {
     }
   }
 
-
   // 🔄 Mettre à jour cotisations suite changement types membres
   async updateMemberCotisations(associationId, newMemberTypes) {
     try {
@@ -775,355 +780,360 @@ formatPhoneNumber(phone) {
     }
   }
 
-   // 📁 UPLOAD DOCUMENT KYB
-async uploadDocument(req, res) {
-  try {
-    const { id: associationId } = req.params;
-    const { type } = req.body;
-    const file = req.file;
+  // 📁 UPLOAD DOCUMENT KYB
+  async uploadDocument(req, res) {
+    try {
+      const { id: associationId } = req.params;
+      const { type } = req.body;
+      const file = req.file;
 
-    if (!file) {
-      return res.status(400).json({
-        error: 'Aucun fichier fourni',
-        code: 'NO_FILE_PROVIDED'
-      });
-    }
-
-    // Vérifier que l'association existe
-    const association = await Association.findByPk(associationId);
-    if (!association) {
-      return res.status(404).json({
-        error: 'Association introuvable',
-        code: 'ASSOCIATION_NOT_FOUND'
-      });
-    }
-
-    // Mapping des types frontend vers types backend
-    const documentTypeMapping = {
-      'statuts': 'association_statuts',
-      'receipisse': 'association_receipt', 
-      'rib': 'iban_proof',
-      'pv_creation': 'meeting_minutes'
-    };
-
-    const mappedType = documentTypeMapping[type] || type;
-
-    // TODO: Upload vers Cloudinary ou S3
-    // Pour l'instant, stockage temporaire local
-    const fileUrl = `uploads/documents/${file.filename}`;
-
-    // Créer document en DB
-    const { Document } = require('../../../models');
-    const document = await Document.create({
-      userId: req.user.id,
-      associationId: associationId,
-      type: mappedType,
-      title: `Document ${type}`,
-      fileName: file.originalname,
-      fileUrl: fileUrl,
-      fileSize: file.size,
-      mimeType: file.mimetype,
-      status: 'pending',
-      uploadedFrom: 'web'
-    });
-
-    // Mettre à jour le documents_status de l'association
-    const currentDocumentsStatus = { ...association.documentsStatus };
-    
-    console.log('Type document:', type);
-    console.log('Documents status avant:', association.documentsStatus);
-    
-    // Utiliser la clé frontend (statuts, receipisse, rib, pv_creation)
-    currentDocumentsStatus[type] = {
-      uploaded: true,
-      validated: false,
-      expiresAt: null
-    };
-
-    console.log('Documents status après:', currentDocumentsStatus);
-
-    // Force Sequelize à détecter le changement avec 'changed'
-    association.documentsStatus = currentDocumentsStatus;
-    association.changed('documentsStatus', true);
-
-    await association.save();
-
-    // DEBUG: Vérifier si l'update a marché
-    const updatedAssoc = await Association.findByPk(associationId);
-    console.log('documents_status après update:', updatedAssoc.documentsStatus);
-
-    console.log(`Document ${type} uploadé et association mise à jour`);
-
-    res.json({
-      success: true,
-      message: 'Document uploadé avec succès',
-      data: {
-        document: {
-          id: document.id,
-          type: document.type,
-          fileName: document.fileName,
-          status: document.status
-        }
+      if (!file) {
+        return res.status(400).json({
+          error: "Aucun fichier fourni",
+          code: "NO_FILE_PROVIDED",
+        });
       }
-    });
 
-  } catch (error) {
-    console.error('Erreur upload document:', error);
-    res.status(500).json({
-      error: 'Erreur upload document',
-      code: 'DOCUMENT_UPLOAD_ERROR',
-      details: error.message
-    });
+      // Vérifier que l'association existe
+      const association = await Association.findByPk(associationId);
+      if (!association) {
+        return res.status(404).json({
+          error: "Association introuvable",
+          code: "ASSOCIATION_NOT_FOUND",
+        });
+      }
+
+      // Mapping des types frontend vers types backend
+      const documentTypeMapping = {
+        statuts: "association_statuts",
+        receipisse: "association_receipt",
+        rib: "iban_proof",
+        pv_creation: "meeting_minutes",
+      };
+
+      const mappedType = documentTypeMapping[type] || type;
+
+      // TODO: Upload vers Cloudinary ou S3
+      // Pour l'instant, stockage temporaire local
+      const fileUrl = `uploads/documents/${file.filename}`;
+
+      // Créer document en DB
+      const { Document } = require("../../../models");
+      const document = await Document.create({
+        userId: req.user.id,
+        associationId: associationId,
+        type: mappedType,
+        title: `Document ${type}`,
+        fileName: file.originalname,
+        fileUrl: fileUrl,
+        fileSize: file.size,
+        mimeType: file.mimetype,
+        status: "pending",
+        uploadedFrom: "web",
+      });
+
+      // Mettre à jour le documents_status de l'association
+      const currentDocumentsStatus = { ...association.documentsStatus };
+
+      console.log("Type document:", type);
+      console.log("Documents status avant:", association.documentsStatus);
+
+      // Utiliser la clé frontend (statuts, receipisse, rib, pv_creation)
+      currentDocumentsStatus[type] = {
+        uploaded: true,
+        validated: false,
+        expiresAt: null,
+      };
+
+      console.log("Documents status après:", currentDocumentsStatus);
+
+      // Force Sequelize à détecter le changement avec 'changed'
+      association.documentsStatus = currentDocumentsStatus;
+      association.changed("documentsStatus", true);
+
+      await association.save();
+
+      // DEBUG: Vérifier si l'update a marché
+      const updatedAssoc = await Association.findByPk(associationId);
+      console.log(
+        "documents_status après update:",
+        updatedAssoc.documentsStatus
+      );
+
+      console.log(`Document ${type} uploadé et association mise à jour`);
+
+      res.json({
+        success: true,
+        message: "Document uploadé avec succès",
+        data: {
+          document: {
+            id: document.id,
+            type: document.type,
+            fileName: document.fileName,
+            status: document.status,
+          },
+        },
+      });
+    } catch (error) {
+      console.error("Erreur upload document:", error);
+      res.status(500).json({
+        error: "Erreur upload document",
+        code: "DOCUMENT_UPLOAD_ERROR",
+        details: error.message,
+      });
+    }
   }
-}
 
   // 📄 LISTER DOCUMENTS ASSOCIATION
   async getDocuments(req, res) {
     try {
       const { id: associationId } = req.params;
 
-      const { Document } = require('../../../models');
+      const { Document } = require("../../../models");
       const documents = await Document.findAll({
         where: {
-          associationId: associationId
+          associationId: associationId,
         },
-        attributes: ['id', 'type', 'title', 'fileName', 'status', 'createdAt'],
-        order: [['createdAt', 'DESC']]
+        attributes: ["id", "type", "title", "fileName", "status", "createdAt"],
+        order: [["createdAt", "DESC"]],
       });
 
       res.json({
         success: true,
-        data: { documents }
+        data: { documents },
       });
-
     } catch (error) {
-      console.error('Erreur récupération documents:', error);
+      console.error("Erreur récupération documents:", error);
       res.status(500).json({
-        error: 'Erreur récupération documents',
-        code: 'DOCUMENTS_FETCH_ERROR'
+        error: "Erreur récupération documents",
+        code: "DOCUMENTS_FETCH_ERROR",
       });
     }
   }
 
   // 📄 TÉLÉCHARGER DOCUMENT SPÉCIFIQUE
-async downloadDocument(req, res) {
-  try {
-    const { id: associationId, documentId } = req.params;
+  async downloadDocument(req, res) {
+    try {
+      const { id: associationId, documentId } = req.params;
 
-    const { Document } = require('../../../models');
-    const document = await Document.findOne({
-      where: {
-        id: documentId,
-        associationId: associationId
+      const { Document } = require("../../../models");
+      const document = await Document.findOne({
+        where: {
+          id: documentId,
+          associationId: associationId,
+        },
+      });
+
+      if (!document) {
+        return res.status(404).json({
+          error: "Document introuvable",
+          code: "DOCUMENT_NOT_FOUND",
+        });
       }
-    });
 
-    if (!document) {
-      return res.status(404).json({
-        error: 'Document introuvable',
-        code: 'DOCUMENT_NOT_FOUND'
+      // Vérifier que le document est téléchargeable
+      if (!document.isDownloadable()) {
+        return res.status(403).json({
+          error: "Document non accessible",
+          code: "DOCUMENT_NOT_ACCESSIBLE",
+          status: document.status,
+        });
+      }
+
+      // Mettre à jour compteur d'accès
+      await document.update({
+        accessCount: document.accessCount + 1,
+        lastAccessedAt: new Date(),
+      });
+
+      // TODO: Pour l'instant, redirection vers l'URL du fichier
+      // Dans une version production, il faudrait :
+      // 1. Vérifier les permissions détaillées
+      // 2. Générer une URL signée temporaire
+      // 3. Servir le fichier via un proxy sécurisé
+
+      res.json({
+        success: true,
+        data: {
+          downloadUrl: document.fileUrl,
+          fileName: document.fileName,
+          fileSize: document.fileSize,
+          mimeType: document.mimeType,
+        },
+      });
+    } catch (error) {
+      console.error("Erreur téléchargement document:", error);
+      res.status(500).json({
+        error: "Erreur téléchargement document",
+        code: "DOCUMENT_DOWNLOAD_ERROR",
+        details: error.message,
       });
     }
-
-    // Vérifier que le document est téléchargeable
-    if (!document.isDownloadable()) {
-      return res.status(403).json({
-        error: 'Document non accessible',
-        code: 'DOCUMENT_NOT_ACCESSIBLE',
-        status: document.status
-      });
-    }
-
-    // Mettre à jour compteur d'accès
-    await document.update({
-      accessCount: document.accessCount + 1,
-      lastAccessedAt: new Date()
-    });
-
-    // TODO: Pour l'instant, redirection vers l'URL du fichier
-    // Dans une version production, il faudrait :
-    // 1. Vérifier les permissions détaillées
-    // 2. Générer une URL signée temporaire
-    // 3. Servir le fichier via un proxy sécurisé
-
-    res.json({
-      success: true,
-      data: {
-        downloadUrl: document.fileUrl,
-        fileName: document.fileName,
-        fileSize: document.fileSize,
-        mimeType: document.mimeType
-      }
-    });
-
-  } catch (error) {
-    console.error('Erreur téléchargement document:', error);
-    res.status(500).json({
-      error: 'Erreur téléchargement document',
-      code: 'DOCUMENT_DOWNLOAD_ERROR',
-      details: error.message
-    });
   }
-}
 
-// 🗑️ SUPPRIMER DOCUMENT
-async deleteDocument(req, res) {
-  try {
-    const { id: associationId, documentId } = req.params;
-    
-    const { Document } = require('../../../models');
-    const document = await Document.findOne({
-      where: { 
-        id: documentId, 
-        associationId: associationId 
+  // 🗑️ SUPPRIMER DOCUMENT
+  async deleteDocument(req, res) {
+    try {
+      const { id: associationId, documentId } = req.params;
+
+      const { Document } = require("../../../models");
+      const document = await Document.findOne({
+        where: {
+          id: documentId,
+          associationId: associationId,
+        },
+      });
+
+      if (!document) {
+        return res.status(404).json({
+          error: "Document introuvable",
+          code: "DOCUMENT_NOT_FOUND",
+        });
       }
-    });
-    
-    if (!document) {
-      return res.status(404).json({
-        error: 'Document introuvable',
-        code: 'DOCUMENT_NOT_FOUND'
+
+      // TODO: Supprimer le fichier physique du stockage (Cloudinary/S3)
+
+      await document.destroy();
+
+      res.json({
+        success: true,
+        message: "Document supprimé avec succès",
+      });
+    } catch (error) {
+      console.error("Erreur suppression document:", error);
+      res.status(500).json({
+        error: "Erreur suppression document",
+        code: "DOCUMENT_DELETE_ERROR",
+        details: error.message,
       });
     }
-    
-    // TODO: Supprimer le fichier physique du stockage (Cloudinary/S3)
-    
-    await document.destroy();
-    
-    res.json({
-      success: true,
-      message: 'Document supprimé avec succès'
-    });
-    
-  } catch (error) {
-    console.error('Erreur suppression document:', error);
-    res.status(500).json({
-      error: 'Erreur suppression document',
-      code: 'DOCUMENT_DELETE_ERROR',
-      details: error.message
-    });
   }
-}
 
-// 🔧 SETUP ASSOCIATION (traite firstName/lastName/phoneNumber)
-async updateAssociationSetup(req, res) {
-  try {
-    const { id } = req.params;
-    const { bureauCentral, isMultiSection, firstSection } = req.body;
+  // 🔧 SETUP ASSOCIATION (traite firstName/lastName/phoneNumber)
+  async updateAssociationSetup(req, res) {
+    try {
+      const { id } = req.params;
+      const { bureauCentral, isMultiSection, firstSection } = req.body;
 
-    console.log('🔍 Données reçues:', { bureauCentral, isMultiSection, firstSection });
-
-    // Récupérer l'association
-    const association = await Association.findByPk(id);
-    if (!association) {
-      return res.status(404).json({
-        error: 'Association introuvable',
-        code: 'ASSOCIATION_NOT_FOUND'
+      console.log("🔍 Données reçues:", {
+        bureauCentral,
+        isMultiSection,
+        firstSection,
       });
-    }
 
-    const updates = {};
+      // Récupérer l'association
+      const association = await Association.findByPk(id);
+      if (!association) {
+        return res.status(404).json({
+          error: "Association introuvable",
+          code: "ASSOCIATION_NOT_FOUND",
+        });
+      }
 
-    // ✅ FIX: Traiter le bureau central avec le bon mapping de champ
-    if (bureauCentral) {
-      const processedBureau = {};
-      
-      for (const [role, roleData] of Object.entries(bureauCentral)) {
-        if (roleData && roleData.firstName && roleData.lastName && roleData.phoneNumber) {
-          // Créer un utilisateur temporaire ou rechercher existant
-          const { User } = require('../../../models');
-          
-          // Chercher utilisateur existant par téléphone
-          let user = await User.findOne({
-            where: { phoneNumber: roleData.phoneNumber }
-          });
+      const updates = {};
 
-          if (!user) {
-            // Créer utilisateur temporaire pour le bureau
-            user = await User.create({
-  phoneNumber: roleData.phoneNumber,
-  firstName: roleData.firstName,
-  lastName: roleData.lastName,
-  status: 'pending_verification'
-});
+      // ✅ FIX: Traiter le bureau central avec le bon mapping de champ
+      if (bureauCentral) {
+        const processedBureau = {};
+
+        for (const [role, roleData] of Object.entries(bureauCentral)) {
+          if (
+            roleData &&
+            roleData.firstName &&
+            roleData.lastName &&
+            roleData.phoneNumber
+          ) {
+            // Créer un utilisateur temporaire ou rechercher existant
+            const { User } = require("../../../models");
+
+            // Chercher utilisateur existant par téléphone
+            let user = await User.findOne({
+              where: { phoneNumber: roleData.phoneNumber },
+            });
+
+            if (!user) {
+              // Créer utilisateur temporaire pour le bureau
+              user = await User.create({
+                phoneNumber: roleData.phoneNumber,
+                firstName: roleData.firstName,
+                lastName: roleData.lastName,
+                status: "pending_verification",
+              });
+            }
+
+            // Structurer le bureau avec la structure attendue
+            processedBureau[role] = {
+              userId: user.id,
+              name: `${user.firstName} ${user.lastName}`,
+              role: roleData.role,
+              phoneNumber: user.phoneNumber,
+              assignedAt: new Date(),
+            };
           }
-
-          // Structurer le bureau avec la structure attendue
-          processedBureau[role] = {
-            userId: user.id,
-            name: `${user.firstName} ${user.lastName}`,
-            role: roleData.role,
-            phoneNumber: user.phoneNumber,
-            assignedAt: new Date()
-          };
         }
+
+        // ✅ FIX CRITIQUE: Utiliser 'centralBoard' au lieu de 'bureauCentral'
+        // Car le champ en base s'appelle 'central_board'
+        updates.centralBoard = processedBureau;
+        console.log("📝 Bureau à sauvegarder:", processedBureau);
       }
-      
-      // ✅ FIX CRITIQUE: Utiliser 'centralBoard' au lieu de 'bureauCentral'
-      // Car le champ en base s'appelle 'central_board' 
-      updates.centralBoard = processedBureau;
-      console.log('📝 Bureau à sauvegarder:', processedBureau);
-    }
 
-    // Traiter le type d'association
-    if (typeof isMultiSection === 'boolean') {
-      updates.isMultiSection = isMultiSection;
-    }
+      // Traiter le type d'association
+      if (typeof isMultiSection === "boolean") {
+        updates.isMultiSection = isMultiSection;
+      }
 
-    // Traiter la première section si fournie
-    if (firstSection && isMultiSection) {
-      const { Section } = require('../../../models');
-      await Section.create({
-        associationId: id,
-        name: firstSection.name,
-        country: firstSection.country,
-        city: firstSection.city,
-        currency: firstSection.currency,
-        language: firstSection.language
+      // Traiter la première section si fournie
+      if (firstSection && isMultiSection) {
+        const { Section } = require("../../../models");
+        await Section.create({
+          associationId: id,
+          name: firstSection.name,
+          country: firstSection.country,
+          city: firstSection.city,
+          currency: firstSection.currency,
+          language: firstSection.language,
+        });
+      }
+
+      console.log("🔄 Updates à appliquer:", updates);
+
+      // Mettre à jour l'association
+      if (Object.keys(updates).length > 0) {
+        const [updatedRows] = await Association.update(updates, {
+          where: { id },
+          returning: true,
+        });
+
+        console.log("✅ Lignes mises à jour:", updatedRows);
+      }
+
+      // Vérification post-update
+      const updatedAssociation = await Association.findByPk(id);
+      console.log("🔍 Association après update:", {
+        id: updatedAssociation.id,
+        centralBoard: updatedAssociation.centralBoard,
+        isMultiSection: updatedAssociation.isMultiSection,
+      });
+
+      res.json({
+        success: true,
+        message: "Setup association terminé avec succès",
+        updated: Object.keys(updates),
+        debug: {
+          updatedFields: Object.keys(updates),
+          centralBoard: updatedAssociation.centralBoard,
+        },
+      });
+    } catch (error) {
+      console.error("❌ Erreur setup association:", error);
+      res.status(500).json({
+        error: "Erreur setup association",
+        details: error.message,
+        stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
       });
     }
-
-    console.log('🔄 Updates à appliquer:', updates);
-
-    // Mettre à jour l'association
-    if (Object.keys(updates).length > 0) {
-      const [updatedRows] = await Association.update(updates, { 
-        where: { id },
-        returning: true 
-      });
-      
-      console.log('✅ Lignes mises à jour:', updatedRows);
-    }
-
-    // Vérification post-update
-    const updatedAssociation = await Association.findByPk(id);
-    console.log('🔍 Association après update:', {
-      id: updatedAssociation.id,
-      centralBoard: updatedAssociation.centralBoard,
-      isMultiSection: updatedAssociation.isMultiSection
-    });
-    
-    res.json({ 
-      success: true, 
-      message: 'Setup association terminé avec succès',
-      updated: Object.keys(updates),
-      debug: {
-        updatedFields: Object.keys(updates),
-        centralBoard: updatedAssociation.centralBoard
-      }
-    });
-    
-  } catch (error) {
-    console.error('❌ Erreur setup association:', error);
-    res.status(500).json({ 
-      error: 'Erreur setup association',
-      details: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
   }
-}
-
-
 }
 
 module.exports = new AssociationController();
