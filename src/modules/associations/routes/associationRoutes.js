@@ -320,6 +320,13 @@ router.put('/:id/setup',
   associationController.updateAssociationSetup
 );
 
+router.get('/:associationId/cotisations-dashboard',
+  authenticate,
+  validateAssociationId,
+  requireAssociationPermission('associationId', ['admin_association', 'president', 'tresorier']),
+  memberController.getCotisationsDashboard
+);
+
 // 🚨 GESTION D'ERREURS
 router.use((error, req, res, next) => {
   console.error('Erreur routes associations:', error);
