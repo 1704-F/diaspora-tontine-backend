@@ -790,118 +790,164 @@ class MemberController {
 
   // 📊 HISTORIQUE COTISATIONS MEMBRE
   async getMemberCotisations(req, res) {
-    try {
-      const { associationId, memberId } = req.params;
-      const { year, limit = 12 } = req.query;
+  try {
+    const { associationId, memberId } = req.params;
+    const { year, limit = 12 } = req.query;
 
-      // Vérifier accès (le membre lui-même ou bureau)
-      const [targetMember, requesterMembership] = await Promise.all([
-        AssociationMember.findOne({
-          where: { id: memberId, associationId },
-          include: [
-            { model: User, as: "user", attributes: ["id", "fullName"] },
-          ],
-        }),
-        AssociationMember.findOne({
-          where: {
-            userId: req.user.id,
-            associationId,
-            status: "active",
+    console.log('🔍 Récupération cotisations:', { associationId, memberId, year });
+
+    // Vérifier accès (le membre lui-même ou bureau)
+    const [targetMember, requesterMembership] = await Promise.all([
+      AssociationMember.findOne({
+        where: { id: memberId, associationId },
+        include: [
+          { 
+            model: User, 
+            as: "user", 
+            attributes: ["id", "firstName", "lastName", "phoneNumber"] // ✅ FIX: firstName + lastName au lieu de fullName
           },
-        }),
-      ]);
-
-      if (!targetMember) {
-        return res.status(404).json({
-          error: "Membre introuvable",
-          code: "MEMBER_NOT_FOUND",
-        });
-      }
-
-      // Vérifier permissions
-      const isOwnData = targetMember.userId === req.user.id;
-      const canViewFinances =
-        requesterMembership &&
-        this.checkPermission(requesterMembership, "view_finances");
-
-      if (!isOwnData && !canViewFinances && req.user.role !== "super_admin") {
-        return res.status(403).json({
-          error: "Accès non autorisé aux données financières",
-          code: "FINANCIAL_DATA_ACCESS_DENIED",
-        });
-      }
-
-      // Construire filtres
-      const whereClause = {
-        memberId,
-        type: "cotisation",
-      };
-
-      if (year) {
-        whereClause.year = parseInt(year);
-      }
-
-      // Récupérer cotisations
-      const cotisations = await Transaction.findAll({
-        where: whereClause,
-        attributes: [
-          "id",
-          "amount",
-          "commissionAmount",
-          "netAmount",
-          "month",
-          "year",
-          "status",
-          "paymentMethod",
-          "created_at",
-          "completedAt",
-          "source",
         ],
-        limit: parseInt(limit),
-        order: [
-          ["year", "DESC"],
-          ["month", "DESC"],
-        ],
-      });
-
-      // Calculer statistiques
-      const stats = {
-        totalPaid: cotisations
-          .filter((c) => c.status === "completed")
-          .reduce((sum, c) => sum + parseFloat(c.amount), 0),
-        totalCommissions: cotisations
-          .filter((c) => c.status === "completed")
-          .reduce((sum, c) => sum + parseFloat(c.commissionAmount), 0),
-        monthsPaid: cotisations.filter((c) => c.status === "completed").length,
-        pendingPayments: cotisations.filter((c) => c.status === "pending")
-          .length,
-        lastPayment: cotisations.find((c) => c.status === "completed"),
-      };
-
-      res.json({
-        success: true,
-        data: {
-          member: {
-            id: targetMember.id,
-            user: targetMember.user,
-            memberType: targetMember.memberType,
-            joinDate: targetMember.joinDate,
-            seniority: targetMember.getTotalSeniority(),
-          },
-          cotisations,
-          stats,
-          period: year || "all",
+      }),
+      AssociationMember.findOne({
+        where: {
+          userId: req.user.id,
+          associationId,
+          status: "active",
         },
-      });
-    } catch (error) {
-      console.error("Erreur historique cotisations:", error);
-      res.status(500).json({
-        error: "Erreur récupération historique cotisations",
-        code: "COTISATIONS_FETCH_ERROR",
-        details: error.message,
+      }),
+    ]);
+
+    if (!targetMember) {
+      return res.status(404).json({
+        error: "Membre introuvable",
+        code: "MEMBER_NOT_FOUND",
       });
     }
+
+    // Vérifier permissions
+    const isOwnData = targetMember.userId === req.user.id;
+    const userRoles = requesterMembership?.roles || [];
+    
+    // ✅ FIX: Supprimer checkPermission qui n'existe pas
+    const canViewFinances = 
+      userRoles.includes("admin_association") ||
+      userRoles.includes("tresorier") ||
+      userRoles.includes("president") ||
+      req.user.role === "super_admin";
+
+    if (!isOwnData && !canViewFinances) {
+      return res.status(403).json({
+        error: "Accès non autorisé aux données financières",
+        code: "FINANCIAL_DATA_ACCESS_DENIED",
+      });
+    }
+
+    // Construire filtres
+    const whereClause = {
+      memberId: parseInt(memberId),
+      type: "cotisation",
+    };
+
+    if (year) {
+      whereClause.year = parseInt(year);
+    }
+
+    console.log('🎯 Filtres whereClause:', whereClause);
+
+    // Récupérer cotisations
+    const cotisations = await Transaction.findAll({
+      where: whereClause,
+      attributes: [
+        "id",
+        "amount",
+        "commissionAmount", 
+        "netAmount",
+        "month",
+        "year", 
+        "status",
+        "paymentMethod",
+        "created_at",
+        "completedAt",
+        "source",
+        "description"
+      ],
+      limit: parseInt(limit),
+      order: [
+        ["year", "DESC"],
+        ["month", "DESC"],
+      ],
+    });
+
+    console.log(`✅ Trouvé ${cotisations.length} cotisations pour membre ${memberId}`);
+
+    // Calculer statistiques
+    const completedCotisations = cotisations.filter(c => c.status === "completed");
+    
+    const stats = {
+      total: cotisations.length,
+      completed: completedCotisations.length,
+      pending: cotisations.filter(c => c.status === "pending").length,
+      failed: cotisations.filter(c => c.status === "failed").length,
+      totalPaid: completedCotisations.reduce((sum, c) => sum + parseFloat(c.amount || 0), 0),
+      totalCommissions: completedCotisations.reduce((sum, c) => sum + parseFloat(c.commissionAmount || 0), 0),
+      totalNet: completedCotisations.reduce((sum, c) => sum + parseFloat(c.netAmount || 0), 0),
+    };
+
+    // Grouper par année/mois
+    const byPeriod = {};
+    cotisations.forEach(cotisation => {
+      const key = `${cotisation.year}-${cotisation.month.toString().padStart(2, '0')}`;
+      if (!byPeriod[key]) {
+        byPeriod[key] = {
+          year: cotisation.year,
+          month: cotisation.month,
+          cotisations: [],
+          totalAmount: 0,
+          status: 'incomplete'
+        };
+      }
+      byPeriod[key].cotisations.push(cotisation);
+      if (cotisation.status === 'completed') {
+        byPeriod[key].totalAmount += parseFloat(cotisation.amount || 0);
+        byPeriod[key].status = 'completed';
+      }
+    });
+
+    res.json({
+      success: true,
+      data: {
+        member: {
+          id: targetMember.id,
+          user: {
+            id: targetMember.user.id,
+            firstName: targetMember.user.firstName,
+            lastName: targetMember.user.lastName,
+            fullName: `${targetMember.user.firstName} ${targetMember.user.lastName}`, // ✅ Concaténation côté backend
+            phoneNumber: targetMember.user.phoneNumber
+          },
+          memberType: targetMember.memberType,
+          cotisationAmount: targetMember.cotisationAmount
+        },
+        cotisations,
+        stats,
+        byPeriod: Object.values(byPeriod).sort((a, b) => {
+          if (a.year !== b.year) return b.year - a.year;
+          return b.month - a.month;
+        }),
+        filters: { year, limit }
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Erreur récupération historique cotisations:", error);
+    res.status(500).json({
+      error: "Erreur récupération historique cotisations",
+      code: "COTISATIONS_FETCH_ERROR",
+      details: error.message,
+    });
   }
+}
+
 
   // 🔄 MODIFIER STATUT MEMBRE
   async updateMemberStatus(req, res) {
