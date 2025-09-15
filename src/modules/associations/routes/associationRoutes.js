@@ -327,6 +327,15 @@ router.get('/:associationId/cotisations-dashboard',
   memberController.getCotisationsDashboard
 );
 
+router.post('/:associationId/cotisations-manual',
+  authenticate,
+  validateAssociationId,
+  requireAssociationPermission('associationId', ['admin_association', 'president', 'secretaire', 'tresorier']),
+  memberController.addManualCotisation
+);
+
+
+
 // 🚨 GESTION D'ERREURS
 router.use((error, req, res, next) => {
   console.error('Erreur routes associations:', error);
