@@ -88,7 +88,7 @@ router.delete('/:id',
 router.put('/:id/configuration',
   authenticate,
   validateId,
-  requireAssociationPermission('id', 'president'), // Configuration = président uniquement
+  requireAssociationPermission('id', ['admin_association', 'president', 'secretaire', 'tresorier']), // ✅ Correct
   associationController.updateConfiguration
 );
 

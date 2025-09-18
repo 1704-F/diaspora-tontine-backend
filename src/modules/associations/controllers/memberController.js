@@ -2019,323 +2019,323 @@ class MemberController {
   }
 
   async getCotisationsDashboard(req, res) {
-    try {
-      const { associationId } = req.params;
-      const {
-        month = new Date().getMonth() + 1,
-        year = new Date().getFullYear(),
-        sectionId,
-        memberType,
-        status,
-      } = req.query;
+  try {
+    const { associationId } = req.params;
+    const { 
+      month = new Date().getMonth() + 1, 
+      year = new Date().getFullYear(),
+      sectionId,
+      memberType,
+      status 
+    } = req.query;
 
-      // Vérifier permissions (admin, président, trésorier)
-      const membership = await AssociationMember.findOne({
-        where: {
-          userId: req.user.id,
-          associationId,
-          status: "active",
-        },
-      });
+    console.log('🔍 Dashboard cotisations:', { associationId, month, year, sectionId });
 
-      const canViewCotisations =
-        membership?.roles?.includes("admin_association") ||
-        membership?.roles?.includes("president") ||
-        membership?.roles?.includes("tresorier") ||
-        req.user.role === "super_admin";
-
-      if (!canViewCotisations) {
-        return res.status(403).json({
-          error: "Permission insuffisante pour voir les cotisations",
-          code: "COTISATIONS_ACCESS_DENIED",
-        });
-      }
-
-      // Récupérer l'association avec ses configurations
-      const association = await Association.findByPk(associationId, {
-        include: [
-          {
-            model: Section,
-            as: "sections",
-            attributes: ["id", "name", "country", "city"],
-          },
-        ],
-      });
-
-      if (!association) {
-        return res.status(404).json({
-          error: "Association introuvable",
-          code: "ASSOCIATION_NOT_FOUND",
-        });
-      }
-
-      // Construire les filtres pour les membres
-      const memberFilters = {
+    // Vérifier permissions
+    const membership = await AssociationMember.findOne({
+      where: {
+        userId: req.user.id,
         associationId,
-        status: "active",
-      };
-
-      if (sectionId) memberFilters.sectionId = sectionId;
-      if (memberType) memberFilters.memberType = memberType;
-
-      // Récupérer tous les membres actifs avec leurs derniers paiements
-      const members = await AssociationMember.findAll({
-        where: memberFilters,
-        include: [
-          {
-            model: User,
-            as: "user",
-            attributes: ["id", "firstName", "lastName", "phoneNumber", "email"],
-          },
-          {
-            model: Section,
-            as: "section",
-            attributes: ["id", "name", "country", "city"],
-          },
-          {
-            model: Transaction,
-            as: "transactions",
-            where: {
-              type: "cotisation",
-              month: parseInt(month),
-              year: parseInt(year),
-              status: ["completed", "pending", "failed"],
-            },
-            required: false, // LEFT JOIN pour inclure membres sans paiement
-            attributes: ["id", "amount", "status", "created_at", "completedAt"],
-          },
-        ],
-      });
-
-      // Calculer les statistiques pour chaque membre
-      const membersWithStatus = members.map((member) => {
-        const memberTypeConfig = association.memberTypes?.find(
-          (type) => type.name === member.memberType
-        );
-        const expectedAmount = memberTypeConfig?.cotisationAmount || 0;
-
-        // Vérifier si le membre a payé ce mois
-        const currentMonthPayment = member.transactions?.find(
-          (t) =>
-            t.month === parseInt(month) &&
-            t.year === parseInt(year) &&
-            t.status === "completed"
-        );
-
-        // Calculer le retard
-        const now = new Date();
-        const currentMonth = new Date(year, month - 1, 5); // 5ème jour du mois = date limite
-        const daysSinceDeadline = Math.floor(
-          (now - currentMonth) / (1000 * 60 * 60 * 24)
-        );
-
-        let cotisationStatus = "paid";
-        if (!currentMonthPayment) {
-          if (daysSinceDeadline > 60) {
-            cotisationStatus = "very_late";
-          } else if (daysSinceDeadline > 30) {
-            cotisationStatus = "late";
-          } else {
-            cotisationStatus = "pending";
-          }
-        }
-
-        return {
-          id: member.id,
-          userId: member.userId,
-          user: {
-            id: member.user.id,
-            firstName: member.user.firstName,
-            lastName: member.user.lastName,
-            phoneNumber: member.user.phoneNumber,
-            email: member.user.email,
-          },
-          memberType: member.memberType,
-          section: member.section
-            ? {
-                id: member.section.id,
-                name: member.section.name,
-                country: member.section.country,
-                city: member.section.city,
-              }
-            : null,
-          expectedAmount,
-          paidAmount: currentMonthPayment?.amount || 0,
-          cotisationStatus,
-          paymentDate: currentMonthPayment?.completedAt || null,
-          daysSinceDeadline: Math.max(0, daysSinceDeadline),
-          joinDate: member.joinDate,
-          roles: member.roles || [],
-        };
-      });
-
-      // Filtrer par statut si demandé
-      let filteredMembers = membersWithStatus;
-      if (status && status !== "all") {
-        filteredMembers = membersWithStatus.filter(
-          (member) => member.cotisationStatus === status
-        );
+        status: 'active'
       }
+    });
 
-      // Calculer les KPIs
-      const totalExpected = membersWithStatus.reduce(
-        (sum, member) => sum + member.expectedAmount,
-        0
-      );
-      const totalCollected = membersWithStatus.reduce(
-        (sum, member) => sum + member.paidAmount,
-        0
-      );
-      const totalPending = totalExpected - totalCollected;
-      const collectionRate =
-        totalExpected > 0
-          ? Math.round((totalCollected / totalExpected) * 100)
-          : 0;
+    const canViewCotisations = 
+      membership?.roles?.includes('admin_association') ||
+      membership?.roles?.includes('president') ||
+      membership?.roles?.includes('tresorier') ||
+      req.user.role === 'super_admin';
 
-      // Statistiques par statut
-      const statusCounts = {
-        paid: membersWithStatus.filter((m) => m.cotisationStatus === "paid")
-          .length,
-        pending: membersWithStatus.filter(
-          (m) => m.cotisationStatus === "pending"
-        ).length,
-        late: membersWithStatus.filter((m) => m.cotisationStatus === "late")
-          .length,
-        very_late: membersWithStatus.filter(
-          (m) => m.cotisationStatus === "very_late"
-        ).length,
-      };
-
-      // Statistiques par section
-      const sectionStats =
-        association.sections?.map((section) => {
-          const sectionMembers = membersWithStatus.filter(
-            (m) => m.section?.id === section.id
-          );
-          const sectionExpected = sectionMembers.reduce(
-            (sum, m) => sum + m.expectedAmount,
-            0
-          );
-          const sectionCollected = sectionMembers.reduce(
-            (sum, m) => sum + m.paidAmount,
-            0
-          );
-
-          return {
-            section: {
-              id: section.id,
-              name: section.name,
-              country: section.country,
-              city: section.city,
-            },
-            membersCount: sectionMembers.length,
-            expectedAmount: sectionExpected,
-            collectedAmount: sectionCollected,
-            collectionRate:
-              sectionExpected > 0
-                ? Math.round((sectionCollected / sectionExpected) * 100)
-                : 0,
-          };
-        }) || [];
-
-      // Ajouter les membres sans section (association centrale)
-      const centralMembers = membersWithStatus.filter((m) => !m.section);
-      if (centralMembers.length > 0) {
-        const centralExpected = centralMembers.reduce(
-          (sum, m) => sum + m.expectedAmount,
-          0
-        );
-        const centralCollected = centralMembers.reduce(
-          (sum, m) => sum + m.paidAmount,
-          0
-        );
-
-        sectionStats.unshift({
-          section: {
-            id: null,
-            name: "Association Centrale",
-            country: null,
-            city: null,
-          },
-          membersCount: centralMembers.length,
-          expectedAmount: centralExpected,
-          collectedAmount: centralCollected,
-          collectionRate:
-            centralExpected > 0
-              ? Math.round((centralCollected / centralExpected) * 100)
-              : 0,
-        });
-      }
-
-      // Statistiques par type de membre
-      const memberTypeStats = Object.entries(
-        membersWithStatus.reduce((acc, member) => {
-          if (!acc[member.memberType]) {
-            acc[member.memberType] = {
-              count: 0,
-              expected: 0,
-              collected: 0,
-            };
-          }
-          acc[member.memberType].count++;
-          acc[member.memberType].expected += member.expectedAmount;
-          acc[member.memberType].collected += member.paidAmount;
-          return acc;
-        }, {})
-      ).map(([type, stats]) => ({
-        memberType: type,
-        membersCount: stats.count,
-        expectedAmount: stats.expected,
-        collectedAmount: stats.collected,
-        collectionRate:
-          stats.expected > 0
-            ? Math.round((stats.collected / stats.expected) * 100)
-            : 0,
-      }));
-
-      res.json({
-        success: true,
-        data: {
-          period: {
-            month: parseInt(month),
-            year: parseInt(year),
-            monthName: new Date(year, month - 1).toLocaleDateString("fr-FR", {
-              month: "long",
-            }),
-          },
-          kpis: {
-            totalExpected,
-            totalCollected,
-            totalPending,
-            collectionRate,
-            membersCount: membersWithStatus.length,
-            ...statusCounts,
-          },
-          members: filteredMembers,
-          statistics: {
-            bySections: sectionStats,
-            byMemberTypes: memberTypeStats,
-          },
-          filters: {
-            month: parseInt(month),
-            year: parseInt(year),
-            sectionId: sectionId || null,
-            memberType: memberType || null,
-            status: status || "all",
-          },
-        },
-      });
-    } catch (error) {
-      console.error("Erreur dashboard cotisations:", error);
-      res.status(500).json({
-        error: "Erreur récupération dashboard cotisations",
-        code: "COTISATIONS_DASHBOARD_ERROR",
-        details: error.message,
+    if (!canViewCotisations) {
+      return res.status(403).json({
+        error: 'Permission insuffisante pour voir les cotisations',
+        code: 'COTISATIONS_ACCESS_DENIED'
       });
     }
-  }
 
-  async addManualCotisation(req, res) {
+    // Récupérer l'association avec ses configurations
+    const association = await Association.findByPk(associationId, {
+      include: [
+        {
+          model: Section,
+          as: 'sections',
+          attributes: ['id', 'name', 'country', 'city']
+        }
+      ]
+    });
+
+    if (!association) {
+      return res.status(404).json({
+        error: 'Association introuvable',
+        code: 'ASSOCIATION_NOT_FOUND'
+      });
+    }
+
+    // 1. Récupérer tous les membres actifs SANS les transactions
+    const memberFilters = {
+      associationId,
+      status: 'active'
+    };
+
+    if (sectionId) memberFilters.sectionId = sectionId;
+    if (memberType) memberFilters.memberType = memberType;
+
+    const members = await AssociationMember.findAll({
+      where: memberFilters,
+      include: [
+        {
+          model: User,
+          as: 'user',
+          attributes: ['id', 'firstName', 'lastName', 'phoneNumber', 'email']
+        },
+        {
+          model: Section,
+          as: 'section',
+          attributes: ['id', 'name', 'country', 'city'],
+          required: false
+        }
+      ]
+    });
+
+    console.log(`✅ Trouvé ${members.length} membres actifs`);
+
+    // 2. Récupérer SÉPARÉMENT les transactions pour la période
+    const transactionsFilters = {
+      associationId,
+      type: 'cotisation',
+      month: parseInt(month),
+      year: parseInt(year)
+    };
+
+    if (sectionId) transactionsFilters.sectionId = sectionId;
+
+    const transactions = await Transaction.findAll({
+      where: transactionsFilters,
+      attributes: ['id', 'amount', 'status', 'memberId', 'paymentMethod', 'created_at', 'completedAt'],
+      include: [
+        {
+          model: AssociationMember,
+          as: 'member',
+          attributes: ['id', 'userId'],
+          include: [
+            {
+              model: User,
+              as: 'user',
+              attributes: ['id', 'firstName', 'lastName']
+            }
+          ]
+        }
+      ]
+    });
+
+    console.log(`✅ Trouvé ${transactions.length} transactions pour ${month}/${year}`);
+
+    // 3. Créer un Map des transactions par memberId
+    const transactionsMap = new Map();
+    transactions.forEach(transaction => {
+      if (!transactionsMap.has(transaction.memberId)) {
+        transactionsMap.set(transaction.memberId, []);
+      }
+      transactionsMap.get(transaction.memberId).push(transaction);
+    });
+
+    // 4. Calculer les statistiques pour chaque membre
+    let totalExpected = 0;
+    let totalCollected = 0;
+    let totalPending = 0;
+    const statusCounts = {
+      paid: 0,
+      pending: 0,
+      late: 0,
+      very_late: 0
+    };
+
+    const membersWithStatus = members.map(member => {
+      // Récupérer montant attendu selon le type de membre
+      const memberTypeConfig = association.memberTypes?.find(type => type.name === member.memberType);
+      const expectedAmount = memberTypeConfig?.cotisationAmount || 0;
+      totalExpected += expectedAmount;
+
+      // Récupérer les transactions du membre pour cette période
+      const memberTransactions = transactionsMap.get(member.id) || [];
+      
+      // Vérifier si le membre a payé ce mois
+      const completedPayment = memberTransactions.find(t => t.status === 'completed');
+      const paidAmount = completedPayment ? parseFloat(completedPayment.amount) : 0;
+      
+      if (paidAmount > 0) {
+        totalCollected += paidAmount;
+      } else {
+        totalPending += expectedAmount;
+      }
+
+      // Calculer le retard
+      const now = new Date();
+      const deadlineDate = new Date(year, month - 1, 5); // 5ème jour du mois
+      const daysSinceDeadline = Math.floor((now - deadlineDate) / (1000 * 60 * 60 * 24));
+      
+      let cotisationStatus = 'paid';
+      if (!completedPayment) {
+        if (daysSinceDeadline > 60) {
+          cotisationStatus = 'very_late';
+        } else if (daysSinceDeadline > 30) {
+          cotisationStatus = 'late';
+        } else {
+          cotisationStatus = 'pending';
+        }
+      }
+
+      statusCounts[cotisationStatus]++;
+
+      return {
+        id: member.id,
+        userId: member.userId,
+        user: {
+          id: member.user.id,
+          firstName: member.user.firstName,
+          lastName: member.user.lastName,
+          phoneNumber: member.user.phoneNumber,
+          email: member.user.email
+        },
+        memberType: member.memberType,
+        section: member.section ? {
+          id: member.section.id,
+          name: member.section.name,
+          country: member.section.country,
+          city: member.section.city
+        } : null,
+        expectedAmount,
+        paidAmount,
+        paymentMethod: completedPayment?.paymentMethod || null,
+        cotisationStatus,
+        paymentDate: completedPayment?.completedAt || null,
+        daysSinceDeadline: Math.max(0, daysSinceDeadline),
+        joinDate: member.joinDate,
+        roles: member.roles || []
+      };
+    });
+
+    // 5. Filtrer par statut si demandé
+    let filteredMembers = membersWithStatus;
+    if (status && status !== 'all') {
+      filteredMembers = membersWithStatus.filter(member => member.cotisationStatus === status);
+    }
+
+    // 6. Calculer les KPIs
+    const collectionRate = totalExpected > 0 ? Math.round((totalCollected / totalExpected) * 100) : 0;
+
+    // 7. Statistiques par section
+    const sectionStats = association.sections?.map(section => {
+      const sectionMembers = membersWithStatus.filter(m => m.section?.id === section.id);
+      const sectionExpected = sectionMembers.reduce((sum, m) => sum + m.expectedAmount, 0);
+      const sectionCollected = sectionMembers.reduce((sum, m) => sum + m.paidAmount, 0);
+      
+      return {
+        section: {
+          id: section.id,
+          name: section.name,
+          country: section.country,
+          city: section.city
+        },
+        membersCount: sectionMembers.length,
+        expectedAmount: sectionExpected,
+        collectedAmount: sectionCollected,
+        collectionRate: sectionExpected > 0 ? Math.round((sectionCollected / sectionExpected) * 100) : 0
+      };
+    }) || [];
+
+    // Ajouter les membres sans section (association centrale)
+    const centralMembers = membersWithStatus.filter(m => !m.section);
+    if (centralMembers.length > 0) {
+      const centralExpected = centralMembers.reduce((sum, m) => sum + m.expectedAmount, 0);
+      const centralCollected = centralMembers.reduce((sum, m) => sum + m.paidAmount, 0);
+
+      sectionStats.unshift({
+        section: {
+          id: null,
+          name: 'Association Centrale',
+          country: null,
+          city: null
+        },
+        membersCount: centralMembers.length,
+        expectedAmount: centralExpected,
+        collectedAmount: centralCollected,
+        collectionRate: centralExpected > 0 ? Math.round((centralCollected / centralExpected) * 100) : 0
+      });
+    }
+
+    // 8. Statistiques par type de membre
+    const memberTypeStats = Object.entries(
+      membersWithStatus.reduce((acc, member) => {
+        if (!acc[member.memberType]) {
+          acc[member.memberType] = {
+            count: 0,
+            expected: 0,
+            collected: 0
+          };
+        }
+        acc[member.memberType].count++;
+        acc[member.memberType].expected += member.expectedAmount;
+        acc[member.memberType].collected += member.paidAmount;
+        return acc;
+      }, {})
+    ).map(([type, stats]) => ({
+      memberType: type,
+      membersCount: stats.count,
+      expectedAmount: stats.expected,
+      collectedAmount: stats.collected,
+      collectionRate: stats.expected > 0 ? Math.round((stats.collected / stats.expected) * 100) : 0
+    }));
+
+    console.log('📊 KPIs calculés:', {
+      totalExpected,
+      totalCollected,
+      collectionRate,
+      statusCounts
+    });
+
+    res.json({
+      success: true,
+      data: {
+        period: {
+          month: parseInt(month),
+          year: parseInt(year),
+          monthName: new Date(year, month - 1).toLocaleDateString('fr-FR', { month: 'long' })
+        },
+        kpis: {
+          totalExpected,
+          totalCollected,
+          totalPending,
+          collectionRate,
+          membersCount: membersWithStatus.length,
+          ...statusCounts
+        },
+        members: filteredMembers,
+        statistics: {
+          bySections: sectionStats,
+          byMemberTypes: memberTypeStats
+        },
+        filters: {
+          month: parseInt(month),
+          year: parseInt(year),
+          sectionId: sectionId || null,
+          memberType: memberType || null,
+          status: status || 'all'
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Erreur dashboard cotisations:', error);
+    res.status(500).json({
+      error: 'Erreur récupération dashboard cotisations',
+      code: 'COTISATIONS_DASHBOARD_ERROR',
+      details: error.message
+    });
+  }
+}
+
+async addManualCotisation(req, res) {
   try {
     const { associationId } = req.params;
     const { memberId, amount, month, year, reason, paymentMethod } = req.body;
@@ -2444,14 +2444,9 @@ class MemberController {
             associationId,
             sectionId: targetMember.sectionId,
             status: 'active',
-            [Op.and]: [
-              AssociationMember.sequelize.where(
-                AssociationMember.sequelize.cast(AssociationMember.sequelize.col('roles'), 'text'),
-                {
-                  [Op.like]: '%tresorier_section%'
-                }
-              )
-            ]
+            roles: {
+              [Op.contains]: ['tresorier_section']
+            }
           },
           include: [{
             model: User,
@@ -2464,14 +2459,9 @@ class MemberController {
           where: {
             associationId,
             status: 'active',
-            [Op.and]: [
-              AssociationMember.sequelize.where(
-                AssociationMember.sequelize.cast(AssociationMember.sequelize.col('roles'), 'text'),
-                {
-                  [Op.like]: '%tresorier%'
-                }
-              )
-            ]
+            roles: {
+              [Op.contains]: ['tresorier']
+            }
           },
           include: [{
             model: User,
@@ -2490,14 +2480,9 @@ class MemberController {
           where: {
             associationId,
             status: 'active',
-            [Op.and]: [
-              AssociationMember.sequelize.where(
-                AssociationMember.sequelize.cast(AssociationMember.sequelize.col('roles'), 'text'),
-                {
-                  [Op.like]: '%tresorier%'
-                }
-              )
-            ]
+            roles: {
+              [Op.contains]: ['tresorier']
+            }
           },
           include: [{
             model: User,
@@ -2512,14 +2497,23 @@ class MemberController {
       }
     }
 
-    // Calculer les commissions si validé directement
+    // ✅ LOGIQUE COMMISSION CORRIGÉE
+    // Commission UNIQUEMENT pour les paiements par carte (frais PSP)
     let commissionAmount = 0;
     let netAmount = parseFloat(amount);
     
-    if (initialStatus === 'completed') {
+    if (paymentMethod === 'card') {
       commissionAmount = parseFloat((amount * 0.025 + 0.25).toFixed(2));
       netAmount = parseFloat((amount - commissionAmount).toFixed(2));
     }
+    // Pour cash, check, bank_transfer : pas de commission
+
+    console.log('💰 Commission calculée:', {
+      paymentMethod,
+      amount: parseFloat(amount),
+      commissionAmount,
+      netAmount
+    });
 
     // Créer la transaction
     const transaction = await Transaction.create({
@@ -2542,7 +2536,9 @@ class MemberController {
       addedByRole: requestorMembership?.roles?.[0] || 'member',
       ...(validatorInfo?.approvedBy && {
         approvedBy: validatorInfo.approvedBy,
-        approvedAt: validatorInfo.approvedAt
+        approvedAt: validatorInfo.approvedAt,
+        completedAt: validatorInfo.approvedAt,
+        processedAt: validatorInfo.approvedAt
       })
     });
 
@@ -2572,6 +2568,8 @@ class MemberController {
         transaction: {
           id: transaction.id,
           amount: parseFloat(amount),
+          commissionAmount,
+          netAmount,
           month: parseInt(month),
           year: parseInt(year),
           status: initialStatus,
@@ -2584,7 +2582,7 @@ class MemberController {
           section: targetMember.section?.name
         },
         validation: {
-          required: initialStatus === 'pending_validation',
+          required: requiresApproval,
           autoValidated: initialStatus === 'completed',
           validators: validatorInfo
         },
