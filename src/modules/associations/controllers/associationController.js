@@ -896,14 +896,16 @@ class AssociationController {
       // 3. Servir le fichier via un proxy sécurisé
 
       res.json({
-        success: true,
-        data: {
-          downloadUrl: document.fileUrl,
-          fileName: document.fileName,
-          fileSize: document.fileSize,
-          mimeType: document.mimeType,
-        },
-      });
+  success: true,
+  data: {
+    downloadUrl: document.fileUrl,
+    fileName: document.fileName,
+    fileSize: document.fileSize,
+    mimeType: document.mimeType,
+    // ✅ Sans path.basename
+    viewUrl: `${document.fileUrl}?type=application/pdf`
+  },
+});
     } catch (error) {
       console.error("Erreur téléchargement document:", error);
       res.status(500).json({

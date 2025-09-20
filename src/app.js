@@ -83,6 +83,21 @@ app.get('/health', (req, res) => {
   });
 });
 
+app.get('/uploads/documents/:filename', (req, res, next) => {
+  const { filename } = req.params;
+  const filePath = `uploads/documents/${filename}`;
+  
+  // Vérifier si le fichier existe
+  if (!require('fs').existsSync(filePath)) {
+    return res.status(404).send('Fichier introuvable');
+  }
+  
+  // Headers pour PDF
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', 'inline');
+  res.sendFile(require('path').resolve(filePath));
+});
+
 // 🛣️ Routes API
 const apiV1 = '/api/v1';
 
@@ -90,6 +105,7 @@ const apiV1 = '/api/v1';
 app.use(`${apiV1}/auth`, require('./core/auth/routes/auth'));
 app.use(`${apiV1}/associations`, require('./modules/associations/routes'));
 app.use(`${apiV1}/users`, require('./core/users/routes/userRoutes'));
+app.use('/uploads', express.static('uploads'));
 
 
 // app.use(`${apiV1}/users`, require('./routes/users')); 
