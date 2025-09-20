@@ -91,6 +91,7 @@ app.use(`${apiV1}/auth`, require('./core/auth/routes/auth'));
 app.use(`${apiV1}/associations`, require('./modules/associations/routes'));
 app.use(`${apiV1}/users`, require('./core/users/routes/userRoutes'));
 
+
 // app.use(`${apiV1}/users`, require('./routes/users')); 
 // app.use(`${apiV1}/tontines`, require('./routes/tontines'));
 // app.use(`${apiV1}/payments`, require('./routes/payments'));
