@@ -274,76 +274,59 @@ const requireAssociationPermission = (associationParam, requiredRoleOrRoles) => 
         console.log('❌ Aucun membership trouvé');
         return res.status(403).json({ 
           error: 'Accès association non autorisé',
-          code: 'NO_MEMBERSHIP'
+          code: 'NOT_ASSOCIATION_MEMBER'
         });
       }
 
-      console.log('📋 Membership trouvé:', {
-        id: membership.id,
-        roles: membership.roles,
-        memberType: membership.memberType
+      console.log('📋 Membership trouvé:', { id: membership.id, roles: membership.roles, memberType: membership.memberType });
+
+      const userRoles = Array.isArray(membership.roles) ? membership.roles : [];
+      console.log('✅ Rôles déjà en array:', userRoles);
+
+      // ✅ HIÉRARCHIE DES RÔLES - Les rôles de bureau incluent 'member'
+      const roleHierarchy = {
+        'admin_association': ['admin_association', 'president', 'secretaire', 'tresorier', 'member'],
+        'president': ['president', 'member'],
+        'secretaire': ['secretaire', 'member'],
+        'tresorier': ['tresorier', 'member'],
+        'responsable_section': ['responsable_section', 'member'],
+        'secretaire_section': ['secretaire_section', 'member'],
+        'tresorier_section': ['tresorier_section', 'member']
+      };
+
+      // Calculer tous les rôles effectifs (directs + hérités)
+      const effectiveRoles = [...userRoles];
+      userRoles.forEach(role => {
+        if (roleHierarchy[role]) {
+          effectiveRoles.push(...roleHierarchy[role]);
+        }
       });
 
-      // 🔧 CORRECTION : Gestion robuste des rôles
-      let userRoles = [];
-      
-      if (membership.roles) {
-        if (typeof membership.roles === 'string') {
-          try {
-            // Essayer de parser comme JSON
-            userRoles = JSON.parse(membership.roles);
-            console.log('✅ Rôles parsés depuis JSON:', userRoles);
-          } catch (error) {
-            // Si pas un JSON, traiter comme string simple
-            userRoles = [membership.roles];
-            console.log('✅ Rôles traités comme string:', userRoles);
-          }
-        } else if (Array.isArray(membership.roles)) {
-          // Déjà un array
-          userRoles = membership.roles;
-          console.log('✅ Rôles déjà en array:', userRoles);
-        }
-      }
+      // Supprimer les doublons
+      const finalRoles = [...new Set(effectiveRoles)];
+      console.log('🎭 Rôles utilisateur finaux:', finalRoles);
 
-      // Vérifier si pas de rôles = membre standard
-      if (userRoles.length === 0) {
-        userRoles = ['member'];
-        console.log('⚠️ Aucun rôle spécifique, assignation membre standard');
-      }
-
-      console.log('🎭 Rôles utilisateur finaux:', userRoles);
-
-      // ADMIN a TOUS les droits
-      if (userRoles.includes('admin_association')) {
-        console.log('👑 Admin détecté - accès autorisé');
-        return next();
-      }
-
-      // Pour les autres, vérifier rôles requis
       const requiredRoles = Array.isArray(requiredRoleOrRoles) ? requiredRoleOrRoles : [requiredRoleOrRoles];
       console.log('🎯 Rôles requis:', requiredRoles);
-      
-      const hasRequiredRole = requiredRoles.some(role => userRoles.includes(role));
+
+      const hasRequiredRole = requiredRoles.some(role => finalRoles.includes(role));
       console.log('🔐 A le rôle requis:', hasRequiredRole);
 
-      if (hasRequiredRole) {
-        console.log('✅ Permission accordée');
-        return next();
+      if (!hasRequiredRole && req.user.role !== 'super_admin') {
+        console.log('❌ Permission refusée');
+        return res.status(403).json({
+          error: 'Permissions insuffisantes pour cette action',
+          code: 'INSUFFICIENT_PERMISSIONS'
+        });
       }
 
-      console.log('❌ Permission refusée');
-      return res.status(403).json({ 
-        error: 'Permissions insuffisantes',
-        code: 'INSUFFICIENT_PERMISSIONS',
-        required: requiredRoles,
-        current: userRoles
-      });
-      
+      console.log('✅ Permission accordée');
+      req.associationMembership = membership;
+      next();
     } catch (error) {
-      console.error('🚨 Erreur middleware permission:', error);
-      return res.status(500).json({ 
-        error: 'Erreur vérification permissions',
-        code: 'PERMISSION_CHECK_ERROR'
+      console.error('Erreur vérification permission association:', error);
+      return res.status(500).json({
+        error: 'Erreur vérification permissions'
       });
     }
   };

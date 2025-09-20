@@ -278,6 +278,14 @@ module.exports = (sequelize, DataTypes) => {
         isUrl: true
       }
     },
+    permissionsMatrix: {
+  type: DataTypes.JSON,
+  allowNull: true,
+  defaultValue: {},
+  comment: 'Matrice des permissions configurables par association'
+},
+
+
     
     // ⚙️ CONFIGURATION AVANCEE
     subscriptionPlan: {
