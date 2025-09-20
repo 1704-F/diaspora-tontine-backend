@@ -175,16 +175,26 @@ const authService = new AuthService();
 // Middleware d'authentification principal
 const authenticate = async (req, res, next) => {
   try {
-    const authHeader = req.headers.authorization;
+    let token = null;
     
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    // Essayer de récupérer le token depuis les headers
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.substring(7);
+    }
+    
+    // Si pas de token dans les headers, essayer dans les query params
+    if (!token && req.query.token) {
+      token = req.query.token;
+    }
+    
+    if (!token) {
       return res.status(401).json({
         error: 'Token d\'authentification requis',
         code: 'MISSING_TOKEN'
       });
     }
 
-    const token = authHeader.substring(7);
     const decoded = await authService.verifyToken(token);
     
     // Récupérer utilisateur complet

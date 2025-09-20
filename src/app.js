@@ -1,11 +1,16 @@
+// app.js - VERSION CORRIGÉE
+
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const compression = require('compression');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
+const path = require('path');
+const fs = require('fs');
 
 const app = express();
+const { authenticate } = require('./core/auth/middleware/auth'); // Assure-toi du bon chemin
 
 // 🔥 CORS Manuel - DOIT ÊTRE EN PREMIER
 app.use((req, res, next) => {
@@ -21,8 +26,20 @@ app.use((req, res, next) => {
   }
 });
 
-// 🛡️ Middleware de sécurité (Ladoum style)
-app.use(helmet());
+// 🛡️ Middleware de sécurité - CONFIGURER HELMET CORRECTEMENT
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      frameSrc: ["'self'", "http://localhost:3001"], // ✅ AUTORISER IFRAME DEPUIS FRONTEND
+      frameAncestors: ["'self'", "http://localhost:3001"], // ✅ AUTORISER AFFICHAGE EN IFRAME
+      objectSrc: ["'none'"],
+      upgradeInsecureRequests: process.env.NODE_ENV === 'production' ? [] : null,
+    },
+  },
+  crossOriginEmbedderPolicy: false, // ✅ DÉSACTIVER POUR IFRAME
+}));
+
 app.use(compression());
 
 // 🌍 CORS Configuration - BACKUP
@@ -68,10 +85,6 @@ if (process.env.NODE_ENV === 'development') {
   app.use(morgan('dev'));
 }
 
-// 📚 DOCUMENTATION SWAGGER (à implémenter)
-// const { specs, swaggerUi, setup } = require('./config/swagger');
-// app.use('/api/v1/docs', swaggerUi.serve, setup);
-
 // ❤️ Route de santé
 app.get('/health', (req, res) => {
   res.status(200).json({
@@ -83,19 +96,74 @@ app.get('/health', (req, res) => {
   });
 });
 
-app.get('/uploads/documents/:filename', (req, res, next) => {
-  const { filename } = req.params;
-  const filePath = `uploads/documents/${filename}`;
-  
-  // Vérifier si le fichier existe
-  if (!require('fs').existsSync(filePath)) {
-    return res.status(404).send('Fichier introuvable');
+// ✅ ROUTE DOCUMENTS CORRIGÉE - DOIT ÊTRE AVANT express.static
+app.get('/uploads/documents/:filename', authenticate, async (req, res) => {
+  try {
+    const { filename } = req.params;
+    const userId = req.user.id; // Depuis le middleware auth
+    
+    // 🔍 VÉRIFIER QUE L'UTILISATEUR A LE DROIT D'ACCÉDER À CE DOCUMENT
+    const { Document, AssociationMember } = require('./models');
+    
+    const document = await Document.findOne({
+      where: {
+        fileUrl: `uploads/documents/${filename}`
+      },
+      include: [{
+        model: require('./models').Association,
+        as: 'association'
+      }]
+    });
+    
+    if (!document) {
+      console.log('❌ Document non trouvé en base:', filename);
+      return res.status(404).json({ error: 'Document introuvable' });
+    }
+    
+    // ✅ VÉRIFIER QUE L'UTILISATEUR EST MEMBRE DE L'ASSOCIATION
+    const isMember = await AssociationMember.findOne({
+      where: {
+        userId: userId,
+        associationId: document.associationId,
+        status: 'active'
+      }
+    });
+    
+    if (!isMember) {
+      console.log('❌ Accès refusé - utilisateur pas membre:', userId, 'association:', document.associationId);
+      return res.status(403).json({ 
+        error: 'Accès non autorisé',
+        code: 'NOT_ASSOCIATION_MEMBER'
+      });
+    }
+    
+    console.log('✅ Accès autorisé pour utilisateur:', userId, 'document:', filename);
+    
+    // 🔍 VÉRIFIER QUE LE FICHIER EXISTE PHYSIQUEMENT
+    const filePath = path.join(__dirname, '..', 'uploads', 'documents', filename);
+    
+    if (!fs.existsSync(filePath)) {
+      console.error('❌ Fichier physique introuvable:', filePath);
+      return res.status(404).json({ error: 'Fichier physique introuvable' });
+    }
+    
+    // ✅ SERVIR LE FICHIER AVEC LES BONS HEADERS
+    res.setHeader('Content-Type', document.mimeType || 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline');
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('Access-Control-Allow-Origin', 'http://localhost:3001');
+    
+    // 📊 LOGGER L'ACCÈS POUR AUDIT
+    console.log(`📄 Document accédé: ${document.fileName} par utilisateur ${userId} (${req.user.firstName} ${req.user.lastName})`);
+    
+    res.sendFile(filePath);
+    
+  } catch (error) {
+    console.error('❌ Erreur serving document sécurisé:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
   }
-  
-  // Headers pour PDF
-  res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', 'inline');
-  res.sendFile(require('path').resolve(filePath));
 });
 
 // 🛣️ Routes API
@@ -105,12 +173,16 @@ const apiV1 = '/api/v1';
 app.use(`${apiV1}/auth`, require('./core/auth/routes/auth'));
 app.use(`${apiV1}/associations`, require('./modules/associations/routes'));
 app.use(`${apiV1}/users`, require('./core/users/routes/userRoutes'));
-app.use('/uploads', express.static('uploads'));
 
-
-// app.use(`${apiV1}/users`, require('./routes/users')); 
-// app.use(`${apiV1}/tontines`, require('./routes/tontines'));
-// app.use(`${apiV1}/payments`, require('./routes/payments'));
+// ✅ STATIC FILES pour autres uploads (images générales, etc.)
+app.use('/uploads', express.static('uploads', {
+  setHeaders: (res, path, stat) => {
+    // Pour tous les autres fichiers statiques, aussi inline par défaut
+    res.setHeader('Content-Disposition', 'inline');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('Access-Control-Allow-Origin', 'http://localhost:3001');
+  }
+}));
 
 // 🧪 Route de test pour vérifier les models
 app.get(`${apiV1}/test/models`, async (req, res) => {
