@@ -320,18 +320,18 @@ module.exports = (sequelize) => {
     timestamps: true,
     
     indexes: [
-      { fields: ['associationId'] },
-      { fields: ['requesterId'] },
-      { fields: ['beneficiaryId'] },
-      { fields: ['status'] },
-      { fields: ['expenseType'] },
-      { fields: ['expenseSubtype'] },
-      { fields: ['createdAt'] },
-      { fields: ['urgencyLevel'] },
-      { fields: ['amountRequested'] },
-      { fields: ['isLoan'] },
-      { fields: ['repaymentStatus'] }
-    ],
+  { fields: ['association_id'] },  // au lieu de 'associationId'
+  { fields: ['requester_id'] },    // au lieu de 'requesterId'
+  { fields: ['beneficiary_id'] },  // au lieu de 'beneficiaryId'
+  { fields: ['status'] },
+  { fields: ['expense_type'] },    // au lieu de 'expenseType'
+  { fields: ['expense_subtype'] }, // au lieu de 'expenseSubtype'
+  { fields: ['created_at'] },      // au lieu de 'createdAt'
+  { fields: ['urgency_level'] },   // au lieu de 'urgencyLevel'
+  { fields: ['amount_requested'] }, // au lieu de 'amountRequested'
+  { fields: ['is_loan'] },         // au lieu de 'isLoan'
+  { fields: ['repayment_status'] } // au lieu de 'repaymentStatus'
+],
     
     hooks: {
       beforeCreate: async (expenseRequest) => {

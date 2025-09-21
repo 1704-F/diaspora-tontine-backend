@@ -185,13 +185,13 @@ module.exports = (sequelize) => {
     timestamps: true,
     
     indexes: [
-      { fields: ['expenseRequestId'] },
-      { fields: ['paymentDate'] },
-      { fields: ['dueDate'] },
-      { fields: ['status'] },
-      { fields: ['validatedBy'] },
-      { fields: ['installmentNumber'] }
-    ],
+  { fields: ['expense_request_id'] }, // au lieu de 'expenseRequestId'
+  { fields: ['payment_date'] },       // au lieu de 'paymentDate'  
+  { fields: ['due_date'] },           // au lieu de 'dueDate'
+  { fields: ['status'] },
+  { fields: ['validated_by'] },       // au lieu de 'validatedBy'
+  { fields: ['installment_number'] }  // au lieu de 'installmentNumber'
+],
     
     hooks: {
       beforeCreate: async (repayment) => {

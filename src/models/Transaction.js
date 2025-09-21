@@ -1,3 +1,4 @@
+//src/models/Transaction.js
 'use strict';
 const { Model } = require('sequelize');
 
