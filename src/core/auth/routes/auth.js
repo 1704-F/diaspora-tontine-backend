@@ -234,51 +234,44 @@ router.post('/verify-otp',
 
       // 🔍 NOUVELLE LOGIQUE : Recherche intelligente de données existantes
       let existingDataSources = [];
+
+// Rechercher si l'utilisateur n'existe pas OU s'il a un profil incomplet
+const shouldSearchExistingData = !user || 
+  (user.status === 'pending_verification') || 
+  (user.firstName === 'Utilisateur' && user.lastName === 'Temporaire');
+
+if (shouldSearchExistingData) {
+  console.log(`🔍 Recherche données existantes pour ${phoneNumber}...`);
+  console.log(`📊 Critères: isNewUser=${!user}, status=${user?.status}, nom=${user?.firstName} ${user?.lastName}`);
+  
+  try {
+    // Rechercher à travers tous les modules
+    const foundDataSources = await UserDataSearchService.searchUserDataAcrossModules(phoneNumber);
+    
+    if (foundDataSources.length > 0) {
+      console.log(`✅ ${foundDataSources.length} source(s) de données trouvée(s)`);
+      existingDataSources = UserDataSearchService.formatResultsForFrontend(foundDataSources);
       
+      // Si pas d'utilisateur, en créer un temporaire
       if (!user) {
-        console.log(`🔍 Recherche données existantes pour ${phoneNumber}...`);
-        
-        // Rechercher à travers tous les modules
-        const foundDataSources = await UserDataSearchService.searchUserDataAcrossModules(phoneNumber);
-        
-        if (foundDataSources.length > 0) {
-          console.log(`📊 ${foundDataSources.length} source(s) de données trouvée(s)`);
-          existingDataSources = UserDataSearchService.formatResultsForFrontend(foundDataSources);
-          
-          // Créer utilisateur temporaire mais ne pas l'assigner encore
-          user = await User.create({
-            phoneNumber,
-            firstName: 'Utilisateur', // Valeurs temporaires
-            lastName: 'Temporaire',   
-            phoneVerified: true,
-            phoneVerifiedAt: new Date(),
-            status: 'pending_verification', // Doit définir PIN + données
-            role: 'member'
-          });
-          
-          console.log(`👤 Utilisateur temporaire créé pour recherche: ${phoneNumber}`);
-        } else {
-          // Aucune donnée trouvée - création standard
-          user = await User.create({
-            phoneNumber,
-            firstName: 'Utilisateur',
-            lastName: 'Temporaire',   
-            phoneVerified: true,
-            phoneVerifiedAt: new Date(),
-            status: 'pending_verification',
-            role: 'member'
-          });
-          
-          console.log(`👤 Nouvel utilisateur créé: ${phoneNumber}`);
-        }
-      } else {
-        // Utilisateur existant - marquer téléphone comme vérifié
-        await user.update({
+        user = await User.create({
+          phoneNumber,
+          firstName: 'Utilisateur', // Valeurs temporaires
+          lastName: 'Temporaire',   
           phoneVerified: true,
-          phoneVerifiedAt: new Date(),
-          lastLoginAt: new Date()
+          status: 'pending_verification'
         });
+        console.log(`👤 Utilisateur temporaire créé: ID ${user.id}`);
       }
+    } else {
+      console.log(`❌ Aucune donnée existante trouvée`);
+    }
+  } catch (error) {
+    console.error('❌ Erreur recherche données existantes:', error);
+  }
+} else {
+  console.log(`⏭️ Pas de recherche nécessaire pour utilisateur actif: ${user.firstName} ${user.lastName}`);
+}
 
       // Auto-détection association/section si utilisateur existant
       let contextInfo = null;

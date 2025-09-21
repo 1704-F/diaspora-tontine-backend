@@ -69,7 +69,7 @@ class UserDataSearchService {
             attributes: ['id', 'name', 'country', 'city']
           }]
         }],
-        attributes: ['id', 'firstName', 'lastName', 'email', 'dateOfBirth', 'gender', 'address', 'city', 'country', 'postalCode', 'createdAt', 'updatedAt']
+        attributes: ['id', 'firstName', 'lastName', 'email', 'dateOfBirth', 'gender', 'address', 'city', 'country', 'postalCode', 'created_at', 'updated_at']
       });
 
       const results = [];
@@ -120,62 +120,66 @@ class UserDataSearchService {
    * Recherche dans le module Tontines
    */
   static async searchInTontinesModule(phoneNumber) {
-    try {
-      const tontineUsers = await User.findAll({
-        where: { phoneNumber },
+  try {
+    const tontineUsers = await User.findAll({
+      where: { phoneNumber },
+      include: [{
+        model: TontineParticipant,
+        as: 'tontineParticipations',
         include: [{
-          model: TontineParticipant,
-          as: 'tontineParticipations',
-          include: [{
-            model: Tontine,
-            as: 'tontine',
-            attributes: ['id', 'name', 'type', 'status', 'organizerId']
-          }]
-        }],
-        attributes: ['id', 'firstName', 'lastName', 'email', 'dateOfBirth', 'gender', 'address', 'city', 'country', 'postalCode', 'createdAt', 'updatedAt']
-      });
+          model: Tontine,
+          as: 'tontine',
+          // ✅ CORRECTION : Utiliser les vrais champs du modèle Tontine
+          attributes: ['id', 'title', 'type', 'status', 'organizerId', 'monthlyContribution']
+          // Remplacer 'name' par 'title' qui existe dans le modèle
+        }]
+      }],
+      attributes: ['id', 'firstName', 'lastName', 'email', 'dateOfBirth', 'gender', 'address', 'city', 'country', 'postalCode', 'created_at', 'updated_at']
+    });
 
-      const results = [];
+    const results = [];
 
-      for (const user of tontineUsers) {
-        if (user.tontineParticipations && user.tontineParticipations.length > 0) {
-          for (const participation of user.tontineParticipations) {
-            
-            const sourceType = this.determineSourceType(user, 'tontine');
-            const addedByInfo = await this.getAddedByInfo(participation, 'tontine');
+    for (const user of tontineUsers) {
+      if (user.tontineParticipations && user.tontineParticipations.length > 0) {
+        for (const participation of user.tontineParticipations) {
+          
+          const sourceType = this.determineSourceType(user, 'tontine');
+          const addedByInfo = await this.getAddedByInfo(participation, 'tontine');
 
-            results.push({
-              module: 'tontines',
-              moduleIcon: '💰',
-              source: participation.tontine.name,
-              sourceType: sourceType,
-              addedBy: addedByInfo,
-              data: this.extractUserData(user),
-              participationData: {
-                status: participation.status,
-                position: participation.position,
-                reputation: participation.reputation,
-                joinDate: participation.joinDate
-              },
-              tontineInfo: {
-                type: participation.tontine.type,
-                status: participation.tontine.status
-              },
-              priority: this.calculatePriority(sourceType, user.updatedAt),
-              lastUpdated: user.updatedAt,
-              userId: user.id
-            });
-          }
+          results.push({
+            module: 'tontines',
+            moduleIcon: '💰',
+            // ✅ CORRECTION : Utiliser 'title' au lieu de 'name'
+            source: participation.tontine.title, // Était: participation.tontine.name
+            sourceType: sourceType,
+            addedBy: addedByInfo,
+            data: this.extractUserData(user),
+            participationData: {
+              status: participation.status,
+              position: participation.position,
+              reputation: participation.reputation,
+              joinDate: participation.joinDate
+            },
+            tontineInfo: {
+              type: participation.tontine.type,
+              status: participation.tontine.status,
+              monthlyContribution: participation.tontine.monthlyContribution
+            },
+            priority: this.calculatePriority(sourceType, user.updatedAt),
+            lastUpdated: user.updatedAt,
+            userId: user.id
+          });
         }
       }
-
-      return results;
-
-    } catch (error) {
-      console.error('Erreur recherche module tontines:', error);
-      return [];
     }
+
+    return results;
+
+  } catch (error) {
+    console.error('Erreur recherche module tontines:', error);
+    return [];
   }
+}
 
   /**
    * MODULES FUTURS - Template pour extension
