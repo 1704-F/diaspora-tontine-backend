@@ -215,7 +215,7 @@ router.post('/verify-otp',
       // OTP valide - Supprimer
       await deleteOTP(phoneNumber);
 
-      // Rechercher ou créer utilisateur
+      // Rechercher utilisateur existant
       let user = await User.findOne({
         where: { phoneNumber },
         include: [
@@ -229,60 +229,88 @@ router.post('/verify-otp',
           }
         ]
       });
+      console.log('🔍 STEP 1 - User après findOne:', user ? `ID: ${user.id}, nom: ${user.firstName}` : 'NULL');
 
       const isNewUser = !user;
 
-      // 🔍 NOUVELLE LOGIQUE : Recherche intelligente de données existantes
+      // 🔍 RECHERCHE INTELLIGENTE DE DONNÉES EXISTANTES
       let existingDataSources = [];
 
-// Rechercher si l'utilisateur n'existe pas OU s'il a un profil incomplet
-const shouldSearchExistingData = !user || 
-  (user.status === 'pending_verification') || 
-  (user.firstName === 'Utilisateur' && user.lastName === 'Temporaire');
+      // Rechercher si l'utilisateur n'existe pas OU s'il a un profil incomplet
+      const shouldSearchExistingData = !user || 
+        (user.status === 'pending_verification') || 
+        (user.firstName === 'Utilisateur' && user.lastName === 'Temporaire');
 
-if (shouldSearchExistingData) {
-  console.log(`🔍 Recherche données existantes pour ${phoneNumber}...`);
-  console.log(`📊 Critères: isNewUser=${!user}, status=${user?.status}, nom=${user?.firstName} ${user?.lastName}`);
-  
-  try {
-    // Rechercher à travers tous les modules
-    const foundDataSources = await UserDataSearchService.searchUserDataAcrossModules(phoneNumber);
-    
-    if (foundDataSources.length > 0) {
-      console.log(`✅ ${foundDataSources.length} source(s) de données trouvée(s)`);
-      existingDataSources = UserDataSearchService.formatResultsForFrontend(foundDataSources);
-      
-      // Si pas d'utilisateur, en créer un temporaire
-      if (!user) {
-        user = await User.create({
-          phoneNumber,
-          firstName: 'Utilisateur', // Valeurs temporaires
-          lastName: 'Temporaire',   
-          phoneVerified: true,
-          status: 'pending_verification'
-        });
-        console.log(`👤 Utilisateur temporaire créé: ID ${user.id}`);
+      if (shouldSearchExistingData) {
+        console.log(`🔍 Recherche données existantes pour ${phoneNumber}...`);
+        console.log(`📊 Critères: isNewUser=${!user}, status=${user?.status}, nom=${user?.firstName} ${user?.lastName}`);
+        
+        try {
+          // Rechercher à travers tous les modules
+          const foundDataSources = await UserDataSearchService.searchUserDataAcrossModules(phoneNumber);
+          
+          if (foundDataSources.length > 0) {
+            console.log(`✅ ${foundDataSources.length} source(s) de données trouvée(s)`);
+            existingDataSources = UserDataSearchService.formatResultsForFrontend(foundDataSources);
+          } else {
+            console.log(`❌ Aucune donnée existante trouvée`);
+          }
+        } catch (error) {
+          console.error('❌ Erreur recherche données existantes:', error);
+        }
+      } else {
+        console.log(`⏭️ Pas de recherche nécessaire pour utilisateur actif: ${user.firstName} ${user.lastName}`);
       }
-    } else {
-      console.log(`❌ Aucune donnée existante trouvée`);
-    }
-  } catch (error) {
-    console.error('❌ Erreur recherche données existantes:', error);
-  }
-} else {
-  console.log(`⏭️ Pas de recherche nécessaire pour utilisateur actif: ${user.firstName} ${user.lastName}`);
-}
+
+      // 🔧 CORRECTION: TOUJOURS CRÉER L'UTILISATEUR S'IL N'EXISTE PAS
+      if (!user) {
+        console.log(`👤 Création nouvel utilisateur pour ${phoneNumber}`);
+        
+        // Si on a trouvé des données existantes, utiliser la première source comme base
+        if (existingDataSources.length > 0) {
+          const firstSource = existingDataSources[0];
+          const sourceData = firstSource.data || {};
+          
+          user = await User.create({
+            phoneNumber,
+            firstName: sourceData.firstName || 'Utilisateur',
+            lastName: sourceData.lastName || 'Temporaire',
+            email: sourceData.email || null,
+            dateOfBirth: sourceData.dateOfBirth || null,
+            gender: sourceData.gender || null,
+            address: sourceData.address || null,
+            city: sourceData.city || null,
+            country: sourceData.country || null,
+            postalCode: sourceData.postalCode || null,
+            phoneVerified: true,
+            status: 'pending_verification'
+          });
+          
+          console.log(`✅ Utilisateur créé avec données existantes: ID ${user.id}`);
+        } else {
+          // Aucune donnée existante, créer utilisateur basique
+          user = await User.create({
+            phoneNumber,
+            firstName: 'Utilisateur',
+            lastName: 'Temporaire',
+            phoneVerified: true,
+            status: 'pending_verification'
+          });
+          
+          console.log(`✅ Utilisateur basique créé: ID ${user.id}`);
+        }
+      }
 
       // Auto-détection association/section si utilisateur existant
       let contextInfo = null;
-      if (user.associationMemberships && user.associationMemberships.length > 0) {
+      if (user && user.associationMemberships && user.associationMemberships.length > 0) {
         const primaryMembership = user.associationMemberships.find(m => m.status === 'active') 
                                  || user.associationMemberships[0];
         
         contextInfo = {
           hasAssociations: true,
           primaryAssociation: {
-          id: primaryMembership.association.id,
+            id: primaryMembership.association.id,
             name: primaryMembership.association.name,
             role: primaryMembership.role
           },
@@ -294,9 +322,9 @@ if (shouldSearchExistingData) {
         };
       }
 
-      // Générer tokens si utilisateur a déjà un PIN
+      // 🔧 CORRECTION: Vérifier que user existe avant d'accéder à ses propriétés
       let tokens = null;
-      if (user.pinCode && user.status === 'active') {
+      if (user && user.pinCode && user.status === 'active') {
         tokens = authService.generateTokens(user, {
           sessionId: `session_${Date.now()}`,
           loginMethod: 'otp',

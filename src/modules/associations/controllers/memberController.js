@@ -12,204 +12,228 @@ const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 class MemberController {
   // 👥 AJOUTER MEMBRE À ASSOCIATION
   async addMember(req, res) {
-    try {
-      const { associationId } = req.params;
+  try {
+    const { associationId } = req.params;
 
-      console.log("--- DEBUG BACKEND ---");
-      console.log("req.body reçu:", req.body);
-      console.log("associationId:", associationId);
-      const {
-        // Soit userId direct (si utilisateur existe déjà)
-        userId,
-        // Soit données pour créer/trouver utilisateur
-        firstName,
-        lastName,
-        phoneNumber,
-        email,
-        // Données membership
-        memberType,
-        sectionId,
-        cotisationAmount,
-        autoPaymentEnabled = false,
-        paymentMethodId,
-      } = req.body;
+    console.log("--- DEBUG BACKEND ---");
+    console.log("req.body reçu:", req.body);
+    console.log("associationId:", associationId);
+    
+    const {
+      // Soit userId direct (si utilisateur existe déjà)
+      userId,
+      // Données obligatoires pour créer utilisateur
+      firstName,
+      lastName,
+      phoneNumber,
+      // Données optionnelles dans l'ordre spécifié
+      email,
+      dateOfBirth,
+      gender,
+      address,
+      city,
+      country,
+      postalCode,
+      // Données membership
+      memberType,
+      sectionId,
+      cotisationAmount,
+      autoPaymentEnabled = false,
+      paymentMethodId,
+    } = req.body;
 
-      console.log("Données extraites:", {
-        userId,
-        firstName,
-        lastName,
-        phoneNumber,
-        email,
-        memberType,
-      });
+    console.log("Données extraites:", {
+      obligatoires: { userId, firstName, lastName, phoneNumber, memberType },
+      optionnelles: { email, dateOfBirth, gender, address, city, country, postalCode }
+    });
 
-      // Vérifier permissions (bureau central ou responsable section)
-      const requesterMembership = await AssociationMember.findOne({
-        where: {
-          userId: req.user.id,
-          associationId,
-          status: "active",
-        },
-      });
-
-      const userRoles = requesterMembership?.roles || [];
-      const canAddMember =
-        userRoles.includes("admin_association") ||
-        userRoles.includes("president") ||
-        userRoles.includes("central_board") ||
-        userRoles.includes("secretaire") ||
-        userRoles.includes("responsable_section") ||
-        req.user.role === "super_admin";
-
-      if (!canAddMember) {
-        return res.status(403).json({
-          error: "Permissions insuffisantes pour ajouter un membre",
-          code: "INSUFFICIENT_ADD_MEMBER_PERMISSIONS",
-        });
-      }
-
-      // NOUVELLE LOGIQUE : Créer ou trouver l'utilisateur
-      let targetUser;
-
-      if (userId) {
-        // Cas 1 : userId fourni directement
-        targetUser = await User.findByPk(userId);
-        if (!targetUser) {
-          return res.status(404).json({
-            error: "Utilisateur introuvable",
-            code: "USER_NOT_FOUND",
-          });
-        }
-      } else if (firstName && lastName && phoneNumber) {
-        // Cas 2 : Créer/trouver utilisateur par ses données
-
-        // D'abord chercher s'il existe déjà
-        targetUser = await User.findOne({
-          where: { phoneNumber: phoneNumber.trim() },
-        });
-
-        if (!targetUser) {
-          // Créer nouvel utilisateur
-          targetUser = await User.create({
-            firstName: firstName.trim(),
-            lastName: lastName.trim(),
-            phoneNumber: phoneNumber.trim(),
-            email: email ? email.trim() : null,
-            status: "pending_verification",
-          });
-
-          console.log(
-            `Nouvel utilisateur créé: ${targetUser.firstName} ${targetUser.lastName} (${targetUser.phoneNumber})`
-          );
-        } else {
-          console.log(
-            `Utilisateur existant trouvé: ${targetUser.firstName} ${targetUser.lastName}`
-          );
-        }
-      } else {
-        return res.status(400).json({
-          error: "userId OU (firstName + lastName + phoneNumber) requis",
-          code: "MISSING_USER_DATA",
-        });
-      }
-
-      // Vérifier qu'il n'est pas déjà membre
-      const existingMembership = await AssociationMember.findOne({
-        where: {
-          userId: targetUser.id, // Utiliser targetUser.id maintenant
-          associationId,
-        },
-      });
-
-      if (existingMembership) {
-        return res.status(400).json({
-          error: "Utilisateur déjà membre de cette association",
-          code: "ALREADY_MEMBER",
-          currentStatus: existingMembership.status,
-        });
-      }
-
-      // Récupérer config association pour validation
-      const association = await Association.findByPk(associationId);
-      const memberTypesConfig = association.memberTypes || [];
-      const memberTypeExists = memberTypesConfig.find(
-        (type) => type.name === memberType
-      );
-
-      if (!memberTypeExists) {
-        return res.status(400).json({
-          error: "Type de membre invalide",
-          code: "INVALID_MEMBER_TYPE",
-          available: memberTypesConfig.map((type) => type.name),
-        });
-      }
-
-      // Si section spécifiée, vérifier qu'elle existe
-      if (sectionId) {
-        const section = await Section.findOne({
-          where: { id: sectionId, associationId },
-        });
-
-        if (!section) {
-          return res.status(404).json({
-            error: "Section introuvable",
-            code: "SECTION_NOT_FOUND",
-          });
-        }
-      }
-
-      // Déterminer montant cotisation
-      const finalCotisationAmount =
-        cotisationAmount || memberTypeExists.cotisationAmount;
-
-      // Créer le membre
-      const member = await AssociationMember.create({
-        userId: targetUser.id, // Utiliser targetUser.id
+    // Vérifier permissions (bureau central ou responsable section)
+    const requesterMembership = await AssociationMember.findOne({
+      where: {
+        userId: req.user.id,
         associationId,
-        sectionId,
-        memberType,
         status: "active",
-        cotisationAmount: finalCotisationAmount,
-        autoPaymentEnabled,
-        paymentMethodId,
-        joinDate: new Date(),
-        approvedDate: new Date(),
-        approvedBy: req.user.id,
-        roles: [],
-        permissions: memberTypeExists.permissions || [],
-      });
+      },
+    });
 
-      // Charger membre complet pour retour
-      const memberComplete = await AssociationMember.findByPk(member.id, {
-        include: [
-          {
-            model: User,
-            as: "user",
-            attributes: ["id", "firstName", "lastName", "phoneNumber", "email"],
-          },
-          {
-            model: Section,
-            as: "section",
-            attributes: ["id", "name", "country"],
-          },
-          { model: Association, as: "association", attributes: ["id", "name"] },
-        ],
-      });
+    const userRoles = requesterMembership?.roles || [];
+    const canAddMember =
+      userRoles.includes("admin_association") ||
+      userRoles.includes("president") ||
+      userRoles.includes("central_board") ||
+      userRoles.includes("secretaire") ||
+      userRoles.includes("responsable_section") ||
+      req.user.role === "super_admin";
 
-      res.status(201).json({
-        success: true,
-        message: "Membre ajouté avec succès",
-        data: { member: memberComplete },
-      });
-    } catch (error) {
-      console.error("Erreur ajout membre:", error);
-      res.status(500).json({
-        error: "Erreur ajout membre",
-        code: "ADD_MEMBER_ERROR",
-        details: error.message,
+    if (!canAddMember) {
+      return res.status(403).json({
+        error: "Permissions insuffisantes pour ajouter un membre",
+        code: "INSUFFICIENT_ADD_MEMBER_PERMISSIONS",
       });
     }
+
+    // NOUVELLE LOGIQUE : Créer ou trouver l'utilisateur
+    let targetUser;
+
+    if (userId) {
+      // Cas 1 : userId fourni directement
+      targetUser = await User.findByPk(userId);
+      if (!targetUser) {
+        return res.status(404).json({
+          error: "Utilisateur introuvable",
+          code: "USER_NOT_FOUND",
+        });
+      }
+    } else if (firstName && lastName && phoneNumber) {
+      // Cas 2 : Créer/trouver utilisateur par ses données
+
+      // D'abord chercher s'il existe déjà
+      targetUser = await User.findOne({
+        where: { phoneNumber: phoneNumber.trim() },
+      });
+
+      if (!targetUser) {
+        // Créer nouvel utilisateur avec TOUS les champs optionnels
+        targetUser = await User.create({
+          // OBLIGATOIRES
+          firstName: firstName.trim(),
+          lastName: lastName.trim(),
+          phoneNumber: phoneNumber.trim(),
+          // OPTIONNELS dans l'ordre spécifié
+          email: email ? email.trim() : null,
+          dateOfBirth: dateOfBirth || null,
+          gender: gender || null,
+          address: address ? address.trim() : null,
+          city: city ? city.trim() : null,
+          country: country || "FR", // Défaut FR
+          postalCode: postalCode ? postalCode.trim() : null,
+          // STATUT
+          status: "pending_verification",
+        });
+
+        console.log(`Nouvel utilisateur créé avec TOUTES les données:`, {
+          id: targetUser.id,
+          firstName: targetUser.firstName,
+          lastName: targetUser.lastName,
+          phoneNumber: targetUser.phoneNumber,
+          email: targetUser.email,
+          dateOfBirth: targetUser.dateOfBirth,
+          gender: targetUser.gender,
+          address: targetUser.address,
+          city: targetUser.city,
+          country: targetUser.country,
+          postalCode: targetUser.postalCode
+        });
+      } else {
+        console.log(`Utilisateur existant trouvé: ${targetUser.firstName} ${targetUser.lastName}`);
+      }
+    } else {
+      return res.status(400).json({
+        error: "userId OU (firstName + lastName + phoneNumber) requis",
+        code: "MISSING_USER_DATA",
+      });
+    }
+
+    // Vérifier qu'il n'est pas déjà membre
+    const existingMembership = await AssociationMember.findOne({
+      where: {
+        userId: targetUser.id,
+        associationId,
+      },
+    });
+
+    if (existingMembership) {
+      return res.status(400).json({
+        error: "Utilisateur déjà membre de cette association",
+        code: "ALREADY_MEMBER",
+        currentStatus: existingMembership.status,
+      });
+    }
+
+    // Récupérer config association pour validation
+    const association = await Association.findByPk(associationId);
+    const memberTypesConfig = association.memberTypes || [];
+    const memberTypeExists = memberTypesConfig.find(
+      (type) => type.name === memberType
+    );
+
+    if (!memberTypeExists) {
+      return res.status(400).json({
+        error: "Type de membre invalide",
+        code: "INVALID_MEMBER_TYPE",
+        available: memberTypesConfig.map((type) => type.name),
+      });
+    }
+
+    // Si section spécifiée, vérifier qu'elle existe
+    if (sectionId) {
+      const section = await Section.findOne({
+        where: { id: sectionId, associationId },
+      });
+
+      if (!section) {
+        return res.status(404).json({
+          error: "Section introuvable",
+          code: "SECTION_NOT_FOUND",
+        });
+      }
+    }
+
+    // Déterminer montant cotisation
+    const finalCotisationAmount =
+      cotisationAmount || memberTypeExists.cotisationAmount;
+
+    // Créer le membre
+    const member = await AssociationMember.create({
+      userId: targetUser.id,
+      associationId,
+      sectionId,
+      memberType,
+      status: "active",
+      cotisationAmount: finalCotisationAmount,
+      autoPaymentEnabled,
+      paymentMethodId,
+      joinDate: new Date(),
+      approvedDate: new Date(),
+      approvedBy: req.user.id,
+      roles: [],
+      permissions: memberTypeExists.permissions || [],
+    });
+
+    // Charger membre complet pour retour
+    const memberComplete = await AssociationMember.findByPk(member.id, {
+      include: [
+        {
+          model: User,
+          as: "user",
+          attributes: [
+            "id", "firstName", "lastName", "phoneNumber", "email",
+            "dateOfBirth", "gender", "address", "city", "country", "postalCode"
+          ],
+        },
+        {
+          model: Section,
+          as: "section",
+          attributes: ["id", "name", "country"],
+        },
+        { model: Association, as: "association", attributes: ["id", "name"] },
+      ],
+    });
+
+    res.status(201).json({
+      success: true,
+      message: "Membre ajouté avec succès",
+      data: { member: memberComplete },
+    });
+  } catch (error) {
+    console.error("Erreur ajout membre:", error);
+    res.status(500).json({
+      error: "Erreur ajout membre",
+      code: "ADD_MEMBER_ERROR",
+      details: error.message,
+    });
   }
+}
 
   async updateMember(req, res) {
   try {
