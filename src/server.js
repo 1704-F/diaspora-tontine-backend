@@ -17,11 +17,11 @@ if (!fs.existsSync(logsDir)) {
 async function startServer() {
   try {
     console.log('🚀 DIASPORA TONTINE BACKEND - Démarrage...\n');
-    
+
     // 🔍 Test connexion PostgreSQL
     await sequelize.authenticate();
     console.log('✅ Connexion PostgreSQL établie avec succès');
-    
+
     // 🔍 Test connexion Redis (optionnel)
     try {
       const redisClient = require('./core/redis/redis');
@@ -34,16 +34,15 @@ async function startServer() {
     } catch (redisError) {
       console.log('⚠️  Redis non disponible, fonctionnement sans cache');
     }
-    
-    // 🔄 Synchronisation des modèles (uniquement en dev - style Ladoum)
+
+    // 🔄 Synchronisation des modèles (uniquement en dev)
     if (process.env.NODE_ENV === 'development') {
       console.log('\n🔄 SYNCHRONISATION MODÈLES (Mode développement)...');
-      
-      // Charger tous les modèles via l'index mis à jour
+
       const models = require('./models');
-      console.log(`📋 ${Object.keys(models).filter(key => typeof models[key] === 'function').length} modèles chargés\n`);
-      
-      // Vérifier intégrité avant sync
+      console.log(`📋 ${Object.keys(models).filter(k => typeof models[k] === 'function').length} modèles chargés\n`);
+
+      // Vérifier intégrité
       const integrityIssues = models.checkModelsIntegrity();
       if (integrityIssues.length > 0) {
         console.error('❌ PROBLÈMES D\'INTÉGRITÉ DÉTECTÉS:');
@@ -51,86 +50,94 @@ async function startServer() {
         console.error('\n🛑 Arrêt du serveur pour correction...\n');
         process.exit(1);
       }
-      
-      // Synchronisation ordonnée des modèles
+
+      // Synchronisation ordonnée
       console.log('🔄 Synchronisation en cours...');
-      
+
       try {
-        // 1. Tables indépendantes d'abord (pas de FK)
+        // 1. Tables indépendantes
         if (models.User) {
           await models.User.sync({ alter: true });
           console.log('   ✅ User synchronisé');
         }
-        
+
         // 2. Tables principales modules
         if (models.Association) {
           await models.Association.sync({ alter: true });
           console.log('   ✅ Association synchronisé');
         }
-        
+
         if (models.Tontine) {
           await models.Tontine.sync({ alter: true });
           console.log('   ✅ Tontine synchronisé');
         }
-        
-        // 3. Tables relations (avec FK vers principales)
+
+        // 3. Tables relations
         if (models.Section) {
-          // Éviter alter: true pour les ENUM (bug Sequelize connu)
           const sectionExists = await sequelize.getQueryInterface().showAllTables()
             .then(tables => tables.includes('sections'));
-          
           if (sectionExists) {
-            await models.Section.sync({ force: false }); // Pas d'alter pour éviter bug ENUM
+            await models.Section.sync({ force: false });
             console.log('   ✅ Section synchronisé (sans alter - table existante)');
           } else {
             await models.Section.sync({ alter: true });
             console.log('   ✅ Section synchronisé (création initiale)');
           }
         }
-        
+
         if (models.AssociationMember) {
           await models.AssociationMember.sync({ alter: true });
           console.log('   ✅ AssociationMember synchronisé');
         }
-        
+
         if (models.TontineParticipant) {
           await models.TontineParticipant.sync({ alter: true });
           console.log('   ✅ TontineParticipant synchronisé');
         }
-        
-        // 4. Tables transactionnelles (avec FK vers relations)
+
+        // 4. Tables transactionnelles
         if (models.Transaction) {
           await models.Transaction.sync({ alter: true });
           console.log('   ✅ Transaction synchronisé');
         }
-        
+
+        // ➕ AJOUT : nouveaux modèles avant Document
+        if (models.ExpenseRequest) {
+          await models.ExpenseRequest.sync({ alter: true });
+          console.log('   ✅ ExpenseRequest synchronisé');
+        }
+
+        if (models.LoanRepayment) {
+          await models.LoanRepayment.sync({ alter: true });
+          console.log('   ✅ LoanRepayment synchronisé');
+        }
+
         if (models.Document) {
           await models.Document.sync({ alter: true });
           console.log('   ✅ Document synchronisé');
         }
-        
+
         if (models.Rating) {
           await models.Rating.sync({ alter: true });
           console.log('   ✅ Rating synchronisé');
         }
-        
+
         // 5. Tables support
         if (models.Event) {
           await models.Event.sync({ alter: true });
           console.log('   ✅ Event synchronisé');
         }
-        
+
         console.log('\n✅ Synchronisation terminée avec succès !');
-        
-        // Afficher résumé architecture
+
         const summary = models.getModelsSummary();
         console.log('\n📊 ARCHITECTURE SYNCHRONISÉE:');
         console.log(`   🏗️  Core: ${summary.coreModels}/3 modèles`);
-        console.log(`   🏛️  Association: ${summary.associationModels}/3 modèles`);
+        console.log(`   🏛️  Association: ${summary.associationModels}/5 modèles`);
         console.log(`   💰 Tontine: ${summary.tontineModels}/3 modèles`);
         console.log(`   📅 Support: ${summary.supportModels}/1 modèles`);
         console.log(`   📈 Total: ${summary.totalModels} modèles\n`);
-        
+
       } catch (syncError) {
         console.error('❌ ERREUR SYNCHRONISATION:', syncError.message);
         console.error('📍 Stack:', syncError.stack);
@@ -139,8 +146,7 @@ async function startServer() {
       }
     } else {
       console.log('⚡ Mode production - Synchronisation désactivée');
-      
-      // En production, juste charger les modèles pour vérifier
+
       const models = require('./models');
       const integrityIssues = models.checkModelsIntegrity();
       if (integrityIssues.length > 0) {
@@ -150,7 +156,7 @@ async function startServer() {
       }
       console.log('✅ Modèles chargés et vérifiés\n');
     }
-    
+
     // 🚀 Démarrage serveur HTTP
     const server = app.listen(PORT, () => {
       console.log('🎯 ================================');
@@ -168,10 +174,9 @@ async function startServer() {
       console.log(`   💰 Tontines: http://localhost:${PORT}/api/v1/tontines/*`);
       console.log(`   📋 API Doc: http://localhost:${PORT}/api-docs (futur)`);
       console.log('');
-      console.log('✅ Prêt à recevoir les requêtes !');
-      console.log('');
+      console.log('✅ Prêt à recevoir les requêtes !\n');
     });
-    
+
     // Gestion graceful shutdown
     process.on('SIGTERM', () => {
       console.log('\n🛑 Signal SIGTERM reçu, arrêt graceful...');
@@ -183,7 +188,7 @@ async function startServer() {
         });
       });
     });
-    
+
     process.on('SIGINT', () => {
       console.log('\n🛑 Signal SIGINT reçu (Ctrl+C), arrêt graceful...');
       server.close(() => {
@@ -194,48 +199,45 @@ async function startServer() {
         });
       });
     });
-    
-    // Gestion erreurs non catchées
+
     process.on('uncaughtException', (error) => {
       console.error('❌ ERREUR NON CATCHÉE:', error);
       process.exit(1);
     });
-    
+
     process.on('unhandledRejection', (reason, promise) => {
       console.error('❌ PROMESSE REJETÉE NON GÉRÉE:', reason);
       console.error('🔍 Promise:', promise);
       process.exit(1);
     });
-    
+
   } catch (error) {
     console.error('❌ ERREUR DÉMARRAGE SERVEUR:');
     console.error('📍 Message:', error.message);
     console.error('📍 Stack:', error.stack);
-    
-    // Détails spécifiques selon le type d'erreur
+
     if (error.name === 'SequelizeConnectionError') {
       console.error('\n💡 AIDE CONNEXION DB:');
       console.error('   - Vérifiez que PostgreSQL est démarré');
       console.error('   - Vérifiez les variables DB_* dans .env');
       console.error('   - Vérifiez les droits d\'accès à la base');
     }
-    
+
     if (error.code === 'EADDRINUSE') {
       console.error(`\n💡 Le port ${PORT} est déjà utilisé`);
       console.error('   - Changez la variable PORT dans .env');
       console.error('   - Ou arrêtez le processus utilisant ce port');
     }
-    
+
     console.error('\n🛑 Arrêt du serveur\n');
     process.exit(1);
   }
 }
 
-// Test rapide des services critiques
+// Tests de santé externes (Stripe/Twilio)
 async function runHealthChecks() {
   console.log('🔍 Tests de santé des services...');
-  
-  // Test Stripe (si configuré)
+
   if (process.env.STRIPE_SECRET_KEY) {
     try {
       const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
@@ -247,8 +249,7 @@ async function runHealthChecks() {
   } else {
     console.log('⚪ Stripe: Non configuré (dev)');
   }
-  
-  // Test Twilio (si configuré)
+
   if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
     try {
       const twilio = require('twilio')(
@@ -263,26 +264,21 @@ async function runHealthChecks() {
   } else {
     console.log('⚪ Twilio: Non configuré (dev)');
   }
-  
+
   console.log('');
 }
 
 // Point d'entrée principal
 (async () => {
   try {
-    // Tests santé services externes
     if (process.env.NODE_ENV !== 'test') {
       await runHealthChecks();
     }
-    
-    // Démarrage serveur principal
     await startServer();
-    
   } catch (error) {
     console.error('❌ ÉCHEC DÉMARRAGE:', error.message);
     process.exit(1);
   }
 })();
 
-// Export pour tests
 module.exports = app;

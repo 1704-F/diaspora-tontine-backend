@@ -3,42 +3,40 @@
 const fs = require('fs');
 const path = require('path');
 const Sequelize = require('sequelize');
-const sequelize = require('../core/database/database');
+const sequelize = require('../core/database/database'); // ✅ chemin correct
 
 const basename = path.basename(__filename);
 const db = {};
 
-// Définir tous les dossiers contenant des modèles
+// Les dossiers de modèles à scanner
 const modelDirectories = [
-  __dirname, // src/models/ (User, Transaction, Document)
-  path.join(__dirname, '../modules/associations/models'), // Association, Section, AssociationMember
-  path.join(__dirname, '../modules/tontines/models')      // Tontine, TontineParticipant, Rating
+  __dirname, // src/models (User, Transaction, Document, etc.)
+  path.join(__dirname, '../modules/associations/models'), // ✅ contient ExpenseRequest & LoanRepayment
+  path.join(__dirname, '../modules/tontines/models')
 ];
 
 console.log('🚀 DIASPORA TONTINE - Chargement des modèles...\n');
 
-// 1. CHARGER TOUS LES MODÈLES D'ABORD
+// 1️⃣ Chargement dynamique des modèles
 modelDirectories.forEach(directory => {
   if (fs.existsSync(directory)) {
     console.log(`📁 Scan du dossier: ${path.relative(process.cwd(), directory)}`);
-    
+
     fs.readdirSync(directory)
-      .filter(file => {
-        return (file.indexOf('.') !== 0) && 
-               (file !== basename) && 
-               (file.slice(-3) === '.js') &&
-               (file.indexOf('.test.js') === -1);
-      })
+      .filter(file =>
+        file.indexOf('.') !== 0 &&
+        file !== basename &&
+        file.slice(-3) === '.js' &&
+        file.indexOf('.test.js') === -1
+      )
       .forEach(file => {
         console.log(`   🔄 Chargement: ${file}`);
         try {
           const modelDefiner = require(path.join(directory, file));
-          
           if (typeof modelDefiner !== 'function') {
             console.error(`   ❌ Erreur: ${file} n'exporte pas une fonction`);
             return;
           }
-          
           const model = modelDefiner(sequelize, Sequelize.DataTypes);
           db[model.name] = model;
           console.log(`   ✅ ${model.name} chargé avec succès`);
@@ -47,21 +45,13 @@ modelDirectories.forEach(directory => {
           console.error(`   📍 Stack trace:`, error.stack);
         }
       });
-    console.log(''); // Ligne vide pour lisibilité
+    console.log('');
   } else {
     console.log(`⚠️  Dossier introuvable: ${path.relative(process.cwd(), directory)}\n`);
   }
 });
 
-// 2. AFFICHER RÉSUMÉ MODÈLES CHARGÉS
-console.log('📋 RÉSUMÉ MODÈLES CHARGÉS:');
-console.log(`   Total: ${Object.keys(db).length} modèles`);
-Object.keys(db).forEach(modelName => {
-  console.log(`   - ${modelName}`);
-});
-console.log('');
-
-// 3. CONFIGURER LES ASSOCIATIONS APRÈS AVOIR CHARGÉ TOUS LES MODÈLES
+// 2️⃣ Configuration des associations
 console.log('🔗 Configuration des associations...');
 Object.keys(db).forEach(modelName => {
   if (db[modelName].associate) {
@@ -76,12 +66,14 @@ Object.keys(db).forEach(modelName => {
   }
 });
 
-// 4. VÉRIFICATION INTÉGRITÉ ASSOCIATIONS
+// 3️⃣ Vérification d’intégrité
 console.log('\n🔍 Vérification intégrité des associations...');
 const expectedModels = [
   'User', 'Association', 'Section', 'AssociationMember',
   'Tontine', 'TontineParticipant', 'Rating',
-  'Transaction', 'Document', 'Event'
+  'Transaction', 'Document', 'Event',
+  // ➕ Nouveaux modèles
+  'ExpenseRequest', 'LoanRepayment'
 ];
 
 const missingModels = expectedModels.filter(model => !db[model]);
@@ -91,107 +83,41 @@ if (missingModels.length > 0) {
   console.log('✅ Tous les modèles essentiels sont chargés');
 }
 
-// 5. VÉRIFICATIONS SPÉCIFIQUES ARCHITECTURE DIASPORATONTINE
-console.log('\n🎯 Vérifications architecture DiasporaTontine...');
-
-// Vérifier User (hub central)
-if (db.User) {
-  const userAssociations = Object.keys(db.User.associations || {});
-  console.log(`   👤 User: ${userAssociations.length} associations configurées`);
-  
-  const expectedUserAssociations = [
-    'associationMemberships', 'tontineParticipations', 
-    'organizedTontines', 'transactions', 'documents'
-  ];
-  
-  const missingUserAssociations = expectedUserAssociations.filter(
-    assoc => !userAssociations.includes(assoc)
-  );
-  
-  if (missingUserAssociations.length > 0) {
-    console.warn(`   ⚠️  Associations User manquantes: ${missingUserAssociations.join(', ')}`);
-  } else {
-    console.log('   ✅ User: toutes les associations configurées');
-  }
-}
-
-// Vérifier Association (module principal)
-if (db.Association) {
-  const assocAssociations = Object.keys(db.Association.associations || {});
-  console.log(`   🏛️  Association: ${assocAssociations.length} associations configurées`);
-}
-
-// Vérifier Tontine (module principal)
-if (db.Tontine) {
-  const tontineAssociations = Object.keys(db.Tontine.associations || {});
-  console.log(`   💰 Tontine: ${tontineAssociations.length} associations configurées`);
-}
-
-// Vérifier Transaction (modèle unifié)
-if (db.Transaction) {
-  const transactionAssociations = Object.keys(db.Transaction.associations || {});
-  console.log(`   💳 Transaction: ${transactionAssociations.length} associations configurées`);
-  
-  // Vérifier que Transaction peut bien se lier à tous les contextes
-  const expectedTransactionRefs = [
-    'user', 'association', 'section', 'member', 'tontine', 'participant'
-  ];
-  
-  const missingTransactionRefs = expectedTransactionRefs.filter(
-    ref => !transactionAssociations.includes(ref)
-  );
-  
-  if (missingTransactionRefs.length > 0) {
-    console.warn(`   ⚠️  Transaction refs manquantes: ${missingTransactionRefs.join(', ')}`);
-  } else {
-    console.log('   ✅ Transaction: toutes les références configurées');
-  }
-}
-
-console.log('');
-
-// Exporter configuration finale
-db.sequelize = sequelize;
-db.Sequelize = Sequelize;
-
-// 6. FONCTIONS UTILITAIRES POUR L'APPLICATION
+// 4️⃣ Fonctions utilitaires
 db.checkModelsIntegrity = () => {
   const issues = [];
-  
-  // Vérifier que tous les modèles essentiels sont présents
   expectedModels.forEach(modelName => {
     if (!db[modelName]) {
       issues.push(`Modèle manquant: ${modelName}`);
     }
   });
-  
-  // Vérifier associations critiques
   if (db.User && !db.User.associations.associationMemberships) {
     issues.push('Association User -> AssociationMember manquante');
   }
-  
   if (db.User && !db.User.associations.tontineParticipations) {
     issues.push('Association User -> TontineParticipant manquante');
   }
-  
   return issues;
 };
 
 db.getModelsSummary = () => {
   return {
-    totalModels: Object.keys(db).filter(key => typeof db[key] === 'function').length,
-    coreModels: ['User', 'Transaction', 'Document'].filter(model => db[model]).length,
-    associationModels: ['Association', 'Section', 'AssociationMember'].filter(model => db[model]).length,
-    tontineModels: ['Tontine', 'TontineParticipant', 'Rating'].filter(model => db[model]).length,
-    supportModels: ['Event'].filter(model => db[model]).length
+    totalModels: Object.keys(db).filter(k => typeof db[k] === 'function').length,
+    coreModels: ['User', 'Transaction', 'Document'].filter(m => db[m]).length,
+    associationModels: [
+      'Association', 'Section', 'AssociationMember',
+      'ExpenseRequest', 'LoanRepayment' // ✅ inclus ici
+    ].filter(m => db[m]).length,
+    tontineModels: ['Tontine', 'TontineParticipant', 'Rating'].filter(m => db[m]).length,
+    supportModels: ['Event'].filter(m => db[m]).length
   };
 };
 
-// Log final
+// 5️⃣ Résumé
 const summary = db.getModelsSummary();
 console.log('📊 ARCHITECTURE DIASPORATONTINE CHARGÉE:');
 console.log(`   🏗️  Modèles core: ${summary.coreModels}/3`);
-console.log(`   🏛️  Modèles association: ${summary.associationModels}/3`);
+console.log(`   🏛️  Modèles association: ${summary.associationModels}/5`);
 console.log(`   💰 Modèles tontine: ${summary.tontineModels}/3`);
 console.log(`   📅 Modèles support: ${summary.supportModels}/1`);
 console.log(`   📈 Total: ${summary.totalModels} modèles`);
@@ -205,5 +131,8 @@ if (integrity.length > 0) {
 }
 
 console.log('\n🚀 Prêt pour synchronisation auto-sync...\n');
+
+db.sequelize = sequelize;
+db.Sequelize = Sequelize;
 
 module.exports = db;
