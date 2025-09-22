@@ -1,5 +1,5 @@
 // src/modules/associations/controllers/expenseRequestController.js
-// Controller pour gestion financière association
+// Controller ExpenseRequest - suit les patterns existants
 
 const { Op } = require('sequelize');
 const { 
@@ -7,12 +7,11 @@ const {
   LoanRepayment, 
   Association, 
   User, 
-  AssociationMember,
+  Section,
   Transaction,
-  Document
+  Document 
 } = require('../../../models');
 const AssociationBalanceService = require('../services/associationBalanceService');
-const NotificationService = require('../../../core/services/notificationService');
 
 class ExpenseRequestController {
   
@@ -35,161 +34,120 @@ class ExpenseRequestController {
         urgencyLevel = 'normal',
         beneficiaryId,
         beneficiaryExternal,
+        documents,
+        externalReferences,
+        expectedImpact,
         isLoan = false,
         loanTerms,
-        expectedImpact,
         metadata
       } = req.body;
       
-      // 🔐 CONTRÔLES PERMISSIONS
-      
-      // Vérifier qui peut créer selon le type
+      // 🔐 CONTRÔLE PERMISSIONS SELON TYPE
       if (expenseType === 'aide_membre') {
-        // Tous les membres peuvent demander des aides
-        if (!beneficiaryId && !beneficiaryExternal) {
-          // Si pas de bénéficiaire spécifié, c'est pour le demandeur
-          req.body.beneficiaryId = userId;
+        // Membres peuvent demander des aides
+        if (!membership || membership.status !== 'active') {
+          return res.status(403).json({
+            error: 'Seuls les membres actifs peuvent demander des aides',
+            code: 'MEMBER_REQUIRED'
+          });
         }
       } else {
-        // Autres types = bureau seulement
-        const userRoles = membership.roles || [];
-        const isBureau = userRoles.some(role => 
+        // Autres dépenses = bureau uniquement
+        const userRoles = membership?.roles || [];
+        const isBureauMember = userRoles.some(role => 
           ['president', 'tresorier', 'secretaire'].includes(role)
         );
         
-        if (!isBureau) {
+        if (!isBureauMember) {
           return res.status(403).json({
-            error: 'Seul le bureau peut créer ce type de dépense',
-            code: 'INSUFFICIENT_PERMISSIONS'
+            error: 'Seul le bureau peut enregistrer ce type de dépense',
+            code: 'BUREAU_REQUIRED'
           });
         }
       }
       
-      // 🔍 VALIDATIONS MÉTIER
+      // 💰 VÉRIFICATION FONDS DISPONIBLES
+      const fundsCheck = await AssociationBalanceService.checkSufficientFunds(
+        parseInt(associationId), 
+        parseFloat(amountRequested)
+      );
       
-      // Vérifier association existe
-      const association = await Association.findByPk(associationId);
-      if (!association) {
-        return res.status(404).json({
-          error: 'Association non trouvée'
-        });
-      }
-      
-      // Vérifier bénéficiaire si spécifié
-      if (beneficiaryId) {
-        const beneficiary = await User.findByPk(beneficiaryId);
-        if (!beneficiary) {
-          return res.status(400).json({
-            error: 'Bénéficiaire non trouvé'
-          });
-        }
-        
-        // Vérifier que bénéficiaire est membre de l'association
-        const beneficiaryMembership = await AssociationMember.findOne({
-          where: {
-            userId: beneficiaryId,
-            associationId,
-            status: 'active'
+      if (!fundsCheck.sufficient) {
+        return res.status(400).json({
+          error: 'Fonds insuffisants',
+          code: 'INSUFFICIENT_FUNDS',
+          details: {
+            requested: amountRequested,
+            available: fundsCheck.availableBalance,
+            shortage: fundsCheck.shortage
           }
         });
-        
-        if (!beneficiaryMembership) {
-          return res.status(400).json({
-            error: 'Le bénéficiaire doit être membre de l\'association'
-          });
-        }
       }
       
-      // Valider sous-type selon configuration association
-      if (expenseSubtype) {
-        const expenseTypes = association.expenseTypes || {};
-        const typeConfig = expenseTypes[expenseType] || {};
-        const subtypeConfig = typeConfig[expenseSubtype];
-        
-        if (!subtypeConfig) {
-          return res.status(400).json({
-            error: `Sous-type "${expenseSubtype}" non configuré pour ce type de dépense`
-          });
-        }
-        
-        // Vérifier montant max si configuré
-        if (subtypeConfig.maxAmount && amountRequested > subtypeConfig.maxAmount) {
-          return res.status(400).json({
-            error: `Montant demandé dépasse le maximum autorisé (${subtypeConfig.maxAmount}€)`
-          });
-        }
-      }
-      
-      // Valider conditions prêt si applicable
-      if (isLoan && loanTerms) {
-        const { durationMonths, interestRate, monthlyPayment } = loanTerms;
-        
-        if (!durationMonths || durationMonths < 1 || durationMonths > 120) {
-          return res.status(400).json({
-            error: 'Durée prêt invalide (1-120 mois)'
-          });
-        }
-        
-        if (interestRate < 0 || interestRate > 50) {
-          return res.status(400).json({
-            error: 'Taux intérêt invalide (0-50%)'
-          });
-        }
-        
-        if (monthlyPayment && monthlyPayment <= 0) {
-          return res.status(400).json({
-            error: 'Mensualité invalide'
-          });
-        }
-      }
-      
-      // 💰 CRÉER LA DEMANDE
+      // ✅ CRÉATION DEMANDE
       const expenseRequest = await ExpenseRequest.create({
         associationId: parseInt(associationId),
-        sectionId: membership.sectionId,
+        sectionId: membership?.sectionId || null,
         requesterId: userId,
-        beneficiaryId,
+        beneficiaryId: beneficiaryId || null,
         beneficiaryExternal,
         expenseType,
         expenseSubtype,
         title,
         description,
-        amountRequested,
+        amountRequested: parseFloat(amountRequested),
         currency,
         urgencyLevel,
+        documents,
+        externalReferences,
+        expectedImpact,
         isLoan,
         loanTerms,
-        expectedImpact,
         metadata,
         status: 'pending'
       });
       
-      // 📧 NOTIFICATIONS (hook se charge de l'envoi)
+      // 📊 CHARGER RELATIONS POUR RÉPONSE
+      const createdRequest = await ExpenseRequest.findByPk(expenseRequest.id, {
+        include: [
+          {
+            model: User,
+            as: 'requester',
+            attributes: ['id', 'firstName', 'lastName']
+          },
+          {
+            model: User,
+            as: 'beneficiary',
+            attributes: ['id', 'firstName', 'lastName']
+          },
+          {
+            model: Association,
+            as: 'association',
+            attributes: ['id', 'name']
+          }
+        ]
+      });
       
       res.status(201).json({
-        message: 'Demande créée avec succès',
+        message: 'Demande de dépense créée avec succès',
         expenseRequest: {
-          id: expenseRequest.id,
-          title: expenseRequest.title,
-          amountRequested: expenseRequest.amountRequested,
-          status: expenseRequest.status,
-          requiredValidators: expenseRequest.requiredValidators,
-          createdAt: expenseRequest.createdAt
+          ...createdRequest.toJSON(),
+          validationProgress: createdRequest.getValidationProgress()
         }
       });
       
     } catch (error) {
       console.error('Erreur création demande dépense:', error);
-      res.status(500).json({
-        error: 'Erreur lors de la création de la demande'
+      res.status(500).json({ 
+        error: 'Erreur lors de la création de la demande' 
       });
     }
   }
   
   /**
-   * 📋 Lister demandes avec filtres et pagination
+   * 📋 Lister demandes de dépenses avec filtres
    */
-   async getExpenseRequests(req, res) {
+  async getExpenseRequests(req, res) {
     try {
       const { associationId } = req.params;
       const userId = req.user.id;
@@ -199,6 +157,7 @@ class ExpenseRequestController {
         status,
         expenseType,
         requesterId,
+        beneficiaryId,
         minAmount,
         maxAmount,
         dateFrom,
@@ -211,19 +170,24 @@ class ExpenseRequestController {
         sortOrder = 'DESC'
       } = req.query;
       
-      // 🔐 CONTRÔLES VISIBILITÉ
-      
+      // 🔐 CONTRÔLE ACCÈS SELON PERMISSIONS
       const association = await Association.findByPk(associationId);
       const permissionsMatrix = association.permissionsMatrix || {};
-      const expensePermissions = permissionsMatrix.view_expense_requests || { allowed_roles: ['bureau_central'] };
+      const expensePermissions = permissionsMatrix.view_expense_requests || { 
+        allowed_roles: ['bureau_central'] 
+      };
       
-      const userRoles = membership.roles || [];
-      const canViewAll = expensePermissions.allowed_roles.some(role => userRoles.includes(role));
+      const userRoles = membership?.roles || [];
+      const canViewAll = expensePermissions.allowed_roles.some(role => 
+        userRoles.includes(role)
+      );
       
-      // 🔍 CONSTRUIRE FILTRES
-      let whereClause = { associationId: parseInt(associationId) };
+      // 🔍 CONSTRUCTION FILTRES
+      let whereClause = { 
+        associationId: parseInt(associationId) 
+      };
       
-      // Si pas droits globaux, voir seulement ses propres demandes + celles où il est bénéficiaire
+      // Si pas de droits complets, voir seulement ses demandes
       if (!canViewAll) {
         whereClause[Op.or] = [
           { requesterId: userId },
@@ -232,48 +196,37 @@ class ExpenseRequestController {
       }
       
       // Filtres optionnels
-      if (status) {
-        whereClause.status = Array.isArray(status) ? status : [status];
-      }
+      if (status) whereClause.status = status;
+      if (expenseType) whereClause.expenseType = expenseType;
+      if (requesterId) whereClause.requesterId = parseInt(requesterId);
+      if (beneficiaryId) whereClause.beneficiaryId = parseInt(beneficiaryId);
+      if (urgencyLevel) whereClause.urgencyLevel = urgencyLevel;
+      if (isLoan !== undefined) whereClause.isLoan = isLoan === 'true';
       
-      if (expenseType) {
-        whereClause.expenseType = Array.isArray(expenseType) ? expenseType : [expenseType];
-      }
-      
-      if (requesterId && canViewAll) {
-        whereClause.requesterId = parseInt(requesterId);
-      }
-      
+      // Filtres montant
       if (minAmount) {
-        whereClause.amountRequested = { [Op.gte]: parseFloat(minAmount) };
+        whereClause.amountRequested = { 
+          [Op.gte]: parseFloat(minAmount) 
+        };
       }
-      
       if (maxAmount) {
-        if (whereClause.amountRequested) {
-          whereClause.amountRequested[Op.lte] = parseFloat(maxAmount);
-        } else {
-          whereClause.amountRequested = { [Op.lte]: parseFloat(maxAmount) };
-        }
+        whereClause.amountRequested = {
+          ...whereClause.amountRequested,
+          [Op.lte]: parseFloat(maxAmount)
+        };
       }
       
+      // Filtres date
       if (dateFrom || dateTo) {
         whereClause.createdAt = {};
         if (dateFrom) whereClause.createdAt[Op.gte] = new Date(dateFrom);
         if (dateTo) whereClause.createdAt[Op.lte] = new Date(dateTo);
       }
       
-      if (urgencyLevel) {
-        whereClause.urgencyLevel = Array.isArray(urgencyLevel) ? urgencyLevel : [urgencyLevel];
-      }
-      
-      if (isLoan !== undefined) {
-        whereClause.isLoan = isLoan === 'true';
-      }
-      
-      // 📊 EXÉCUTER REQUÊTE
+      // 📊 EXÉCUTION REQUÊTE AVEC PAGINATION
       const offset = (parseInt(page) - 1) * parseInt(limit);
       
-      const { count, rows: expenseRequests } = await ExpenseRequest.findAndCountAll({
+      const { count, rows } = await ExpenseRequest.findAndCountAll({
         where: whereClause,
         include: [
           {
@@ -285,55 +238,53 @@ class ExpenseRequestController {
             model: User,
             as: 'beneficiary',
             attributes: ['id', 'firstName', 'lastName']
+          },
+          {
+            model: Section,
+            as: 'section',
+            attributes: ['id', 'name']
           }
         ],
-        order: [[sortBy, sortOrder]],
-        offset,
-        limit: parseInt(limit)
+        order: [[sortBy, sortOrder.toUpperCase()]],
+        limit: parseInt(limit),
+        offset
       });
       
-      // 📈 STATISTIQUES RAPIDES
-      const summary = canViewAll ? await this.getQuickSummary(associationId) : null;
+      // 📈 ENRICHIR AVEC PROGRESS VALIDATION
+      const enrichedRows = rows.map(request => ({
+        ...request.toJSON(),
+        validationProgress: request.getValidationProgress(),
+        canModify: request.canBeModified() && (
+          request.requesterId === userId || canViewAll
+        )
+      }));
       
       res.json({
-        expenseRequests: expenseRequests.map(req => ({
-          id: req.id,
-          title: req.title,
-          expenseType: req.expenseType,
-          expenseSubtype: req.expenseSubtype,
-          amountRequested: req.amountRequested,
-          amountApproved: req.amountApproved,
-          currency: req.currency,
-          status: req.status,
-          urgencyLevel: req.urgencyLevel,
-          isLoan: req.isLoan,
-          requester: req.requester,
-          beneficiary: req.beneficiary || req.beneficiaryExternal,
-          validationProgress: req.getValidationProgress(),
-          createdAt: req.createdAt,
-          paidAt: req.paidAt
-        })),
+        expenseRequests: enrichedRows,
         pagination: {
-          total: count,
-          page: parseInt(page),
-          limit: parseInt(limit),
-          totalPages: Math.ceil(count / parseInt(limit))
+          currentPage: parseInt(page),
+          totalPages: Math.ceil(count / parseInt(limit)),
+          totalItems: count,
+          itemsPerPage: parseInt(limit)
         },
-        summary
+        filters: {
+          applied: Object.keys(req.query).length > 0,
+          canViewAll
+        }
       });
       
     } catch (error) {
-      console.error('Erreur listage demandes dépenses:', error);
-      res.status(500).json({
-        error: 'Erreur lors du listage des demandes'
+      console.error('Erreur liste demandes dépenses:', error);
+      res.status(500).json({ 
+        error: 'Erreur lors de la récupération des demandes' 
       });
     }
   }
   
   /**
-   * 📄 Détails d'une demande spécifique
+   * 🔍 Détails d'une demande spécifique
    */
-   async getExpenseRequestDetails(req, res) {
+  async getExpenseRequestDetails(req, res) {
     try {
       const { associationId, requestId } = req.params;
       const userId = req.user.id;
@@ -348,12 +299,12 @@ class ExpenseRequestController {
           {
             model: User,
             as: 'requester',
-            attributes: ['id', 'firstName', 'lastName', 'phoneNumber']
+            attributes: ['id', 'firstName', 'lastName']
           },
           {
             model: User,
             as: 'beneficiary',
-            attributes: ['id', 'firstName', 'lastName', 'phoneNumber']
+            attributes: ['id', 'firstName', 'lastName']
           },
           {
             model: User,
@@ -361,9 +312,19 @@ class ExpenseRequestController {
             attributes: ['id', 'firstName', 'lastName']
           },
           {
+            model: Association,
+            as: 'association',
+            attributes: ['id', 'name']
+          },
+          {
+            model: Section,
+            as: 'section',
+            attributes: ['id', 'name']
+          },
+          {
             model: Transaction,
             as: 'transaction',
-            attributes: ['id', 'amount', 'status', 'pspTransactionId']
+            attributes: ['id', 'amount', 'status', 'createdAt']
           },
           {
             model: Document,
@@ -375,23 +336,29 @@ class ExpenseRequestController {
       
       if (!expenseRequest) {
         return res.status(404).json({
-          error: 'Demande non trouvée'
+          error: 'Demande non trouvée',
+          code: 'EXPENSE_REQUEST_NOT_FOUND'
         });
       }
       
       // 🔐 CONTRÔLE ACCÈS
       const association = await Association.findByPk(associationId);
       const permissionsMatrix = association.permissionsMatrix || {};
-      const expensePermissions = permissionsMatrix.view_expense_requests || { allowed_roles: ['bureau_central'] };
+      const expensePermissions = permissionsMatrix.view_expense_requests || { 
+        allowed_roles: ['bureau_central'] 
+      };
       
-      const userRoles = membership.roles || [];
-      const canViewAll = expensePermissions.allowed_roles.some(role => userRoles.includes(role));
+      const userRoles = membership?.roles || [];
+      const canViewAll = expensePermissions.allowed_roles.some(role => 
+        userRoles.includes(role)
+      );
       const isRequester = expenseRequest.requesterId === userId;
       const isBeneficiary = expenseRequest.beneficiaryId === userId;
       
       if (!canViewAll && !isRequester && !isBeneficiary) {
         return res.status(403).json({
-          error: 'Accès refusé à cette demande'
+          error: 'Accès refusé à cette demande',
+          code: 'ACCESS_DENIED'
         });
       }
       
@@ -429,8 +396,8 @@ class ExpenseRequestController {
       
     } catch (error) {
       console.error('Erreur détails demande dépense:', error);
-      res.status(500).json({
-        error: 'Erreur lors de la récupération des détails'
+      res.status(500).json({ 
+        error: 'Erreur lors de la récupération des détails' 
       });
     }
   }
@@ -438,7 +405,7 @@ class ExpenseRequestController {
   /**
    * ✏️ Modifier demande (avant validation complète)
    */
-   async updateExpenseRequest(req, res) {
+  async updateExpenseRequest(req, res) {
     try {
       const { associationId, requestId } = req.params;
       const userId = req.user.id;
@@ -453,432 +420,100 @@ class ExpenseRequestController {
       
       if (!expenseRequest) {
         return res.status(404).json({
-          error: 'Demande non trouvée'
+          error: 'Demande non trouvée',
+          code: 'EXPENSE_REQUEST_NOT_FOUND'
         });
       }
       
-      // 🔐 CONTRÔLE PERMISSIONS
-      const userRoles = membership.roles || [];
-      const isBureau = userRoles.some(role => ['president', 'tresorier', 'secretaire'].includes(role));
+      // 🔐 CONTRÔLE DROITS MODIFICATION
+      const userRoles = membership?.roles || [];
+      const isBureauMember = userRoles.some(role => 
+        ['president', 'tresorier', 'secretaire'].includes(role)
+      );
       const isRequester = expenseRequest.requesterId === userId;
       
-      if (!isRequester && !isBureau) {
+      if (!isRequester && !isBureauMember) {
         return res.status(403).json({
-          error: 'Seul le demandeur ou le bureau peut modifier'
+          error: 'Droits insuffisants pour modifier cette demande',
+          code: 'INSUFFICIENT_RIGHTS'
         });
       }
       
-      // 🔐 CONTRÔLE STATUT
+      // ✅ VÉRIFIER SI MODIFIABLE
       if (!expenseRequest.canBeModified()) {
         return res.status(400).json({
           error: 'Cette demande ne peut plus être modifiée',
-          currentStatus: expenseRequest.status
+          code: 'NOT_MODIFIABLE',
+          details: { status: expenseRequest.status }
         });
       }
       
-      // 📝 MISE À JOUR
-      const allowedFields = [
-        'title', 'description', 'amountRequested', 'urgencyLevel',
-        'expectedImpact', 'metadata'
-      ];
-      
-      const updateData = {};
-      allowedFields.forEach(field => {
-        if (req.body[field] !== undefined) {
-          updateData[field] = req.body[field];
-        }
-      });
-      
-      // Validation montant si modifié
-      if (updateData.amountRequested) {
-        const association = await Association.findByPk(associationId);
-        const expenseTypes = association.expenseTypes || {};
-        const typeConfig = expenseTypes[expenseRequest.expenseType] || {};
-        const subtypeConfig = typeConfig[expenseRequest.expenseSubtype];
-        
-        if (subtypeConfig?.maxAmount && updateData.amountRequested > subtypeConfig.maxAmount) {
-          return res.status(400).json({
-            error: `Montant dépasse le maximum autorisé (${subtypeConfig.maxAmount}€)`
-          });
-        }
-      }
-      
-      await expenseRequest.update(updateData, {
-        userId // Pour audit trail
-      });
-      
-      res.json({
-        message: 'Demande mise à jour avec succès',
-        expenseRequest: {
-          id: expenseRequest.id,
-          title: expenseRequest.title,
-          amountRequested: expenseRequest.amountRequested,
-          status: expenseRequest.status,
-          updatedAt: expenseRequest.updatedAt
-        }
-      });
-      
-    } catch (error) {
-      console.error('Erreur modification demande dépense:', error);
-      res.status(500).json({
-        error: 'Erreur lors de la modification'
-      });
-    }
-  }
-  
-  /**
-   * ❌ Annuler demande
-   */
-  async cancelExpenseRequest(req, res) {
-    try {
-      const { associationId, requestId } = req.params;
-      const { reason } = req.body;
-      const userId = req.user.id;
-      const membership = req.membership;
-      
-      const expenseRequest = await ExpenseRequest.findOne({
-        where: {
-          id: parseInt(requestId),
-          associationId: parseInt(associationId)
-        }
-      });
-      
-      if (!expenseRequest) {
-        return res.status(404).json({
-          error: 'Demande non trouvée'
-        });
-      }
-      
-      // 🔐 CONTRÔLE PERMISSIONS
-      const userRoles = membership.roles || [];
-      const isBureau = userRoles.some(role => ['president', 'tresorier', 'secretaire'].includes(role));
-      const isRequester = expenseRequest.requesterId === userId;
-      
-      if (!isRequester && !isBureau) {
-        return res.status(403).json({
-          error: 'Seul le demandeur ou le bureau peut annuler'
-        });
-      }
-      
-      // 🔐 CONTRÔLE STATUT
-      if (['paid', 'cancelled'].includes(expenseRequest.status)) {
-        return res.status(400).json({
-          error: 'Cette demande ne peut pas être annulée',
-          currentStatus: expenseRequest.status
-        });
-      }
-      
-      await expenseRequest.update({
-        status: 'cancelled',
-        rejectionReason: reason || `Annulée par ${isRequester ? 'le demandeur' : 'le bureau'}`
-      }, {
-        userId
-      });
-      
-      res.json({
-        message: 'Demande annulée avec succès'
-      });
-      
-    } catch (error) {
-      console.error('Erreur annulation demande dépense:', error);
-      res.status(500).json({
-        error: 'Erreur lors de l\'annulation'
-      });
-    }
-  }
-  
-  /**
-   * ⚖️ Valider/rejeter/demander infos
-   */
-   async validateExpenseRequest(req, res) {
-    try {
-      const { associationId, requestId } = req.params;
-      const { decision, comment, amountApproved, conditions } = req.body;
-      const userId = req.user.id;
-      const membership = req.membership;
-      
-      const expenseRequest = await ExpenseRequest.findOne({
-        where: {
-          id: parseInt(requestId),
-          associationId: parseInt(associationId)
-        }
-      });
-      
-      if (!expenseRequest) {
-        return res.status(404).json({
-          error: 'Demande non trouvée'
-        });
-      }
-      
-      // 🔐 DÉTERMINER RÔLE VALIDATEUR
-      const userRoles = membership.roles || [];
-      const association = await Association.findByPk(associationId);
-      const bureauCentral = association.bureauCentral || {};
-      
-      let validatorRole = null;
-      if (userRoles.includes('president') || Object.values(bureauCentral).find(m => m.userId === userId && m.role.includes('Président'))) {
-        validatorRole = 'president';
-      } else if (userRoles.includes('tresorier') || Object.values(bureauCentral).find(m => m.userId === userId && m.role.includes('Trésorier'))) {
-        validatorRole = 'tresorier';
-      } else if (userRoles.includes('secretaire') || Object.values(bureauCentral).find(m => m.userId === userId && m.role.includes('Secrétaire'))) {
-        validatorRole = 'secretaire';
-      }
-      
-      if (!validatorRole) {
-        return res.status(403).json({
-          error: 'Rôle validateur non identifié'
-        });
-      }
-      
-      // 🔍 VÉRIFIER SI DÉJÀ VALIDÉ PAR CE RÔLE
-      const validationHistory = expenseRequest.validationHistory || [];
-      const alreadyValidated = validationHistory.find(v => 
-        v.userId === userId || v.role === validatorRole
-      );
-      
-      if (alreadyValidated && decision === 'approve') {
-        return res.status(400).json({
-          error: 'Vous avez déjà validé cette demande'
-        });
-      }
-      
-      // 💰 CONTRÔLE FONDS DISPONIBLES (si approbation)
-      if (decision === 'approve') {
-        const requestedAmount = amountApproved || expenseRequest.amountRequested;
+      // 💰 VÉRIFIER FONDS SI MONTANT MODIFIÉ
+      const { amountRequested } = req.body;
+      if (amountRequested && parseFloat(amountRequested) !== parseFloat(expenseRequest.amountRequested)) {
         const fundsCheck = await AssociationBalanceService.checkSufficientFunds(
           parseInt(associationId), 
-          requestedAmount
+          parseFloat(amountRequested)
         );
         
         if (!fundsCheck.sufficient) {
           return res.status(400).json({
-            error: 'Fonds insuffisants',
-            availableBalance: fundsCheck.availableBalance,
-            requestedAmount: requestedAmount,
-            shortage: fundsCheck.shortage
+            error: 'Fonds insuffisants pour ce montant',
+            code: 'INSUFFICIENT_FUNDS',
+            details: {
+              requested: amountRequested,
+              available: fundsCheck.availableBalance
+            }
           });
         }
       }
       
-      // 📝 TRAITEMENT SELON DÉCISION
-      let newStatus = expenseRequest.status;
-      let updateData = {};
-      
-      if (decision === 'approve') {
-        // Ajouter validation à l'historique
-        const newValidation = {
-          userId,
-          role: validatorRole,
-          decision: 'approved',
-          comment,
-          timestamp: new Date(),
-          amountApproved: amountApproved || expenseRequest.amountRequested
-        };
-        
-        const updatedHistory = [...validationHistory, newValidation];
-        updateData.validationHistory = updatedHistory;
-        
-        if (amountApproved) {
-          updateData.amountApproved = amountApproved;
-        }
-        
-        if (conditions) {
-          updateData.metadata = {
-            ...expenseRequest.metadata,
-            approvalConditions: conditions
-          };
-        }
-        
-        // Vérifier si toutes les validations requises sont obtenues
-        const requiredValidators = expenseRequest.requiredValidators || [];
-        const approvedValidators = updatedHistory
-          .filter(v => v.decision === 'approved')
-          .map(v => v.role);
-        
-        const allValidated = requiredValidators.every(role => 
-          approvedValidators.includes(role)
-        );
-        
-        if (allValidated) {
-          newStatus = 'approved';
-          updateData.amountApproved = updateData.amountApproved || expenseRequest.amountRequested;
-        } else {
-          newStatus = 'under_review';
-        }
-        
-      } else if (decision === 'reject') {
-        newStatus = 'rejected';
-        updateData.rejectionReason = comment || 'Demande rejetée par le bureau';
-        updateData.validationHistory = [...validationHistory, {
-          userId,
-          role: validatorRole,
-          decision: 'rejected',
-          comment,
-          timestamp: new Date()
-        }];
-        
-      } else if (decision === 'request_info') {
-        newStatus = 'additional_info_needed';
-        updateData.validationHistory = [...validationHistory, {
-          userId,
-          role: validatorRole,
-          decision: 'info_requested',
-          comment,
-          timestamp: new Date()
-        }];
-      }
-      
-      updateData.status = newStatus;
-      
-      await expenseRequest.update(updateData, { userId });
-      
-      // 📧 NOTIFICATIONS
-      await NotificationService.sendExpenseValidationNotification(
-        expenseRequest,
-        decision,
-        validatorRole,
-        comment
-      );
-      
-      res.json({
-        message: `Demande ${decision === 'approve' ? 'approuvée' : decision === 'reject' ? 'rejetée' : 'mise en attente'}`,
-        status: newStatus,
-        validationProgress: expenseRequest.getValidationProgress(),
-        fullyApproved: newStatus === 'approved'
+      // 🔄 MISE À JOUR
+      const updatedRequest = await expenseRequest.update(req.body, {
+        userId // Pour audit trail
       });
       
-    } catch (error) {
-      console.error('Erreur validation demande dépense:', error);
-      res.status(500).json({
-        error: 'Erreur lors de la validation'
-      });
-    }
-  }
-  
-  /**
-   * 📊 Statistiques rapides pour summary
-   */
-   async getQuickSummary(associationId) {
-    try {
-      const [pending, approved, paid, totalAmount] = await Promise.all([
-        ExpenseRequest.count({
-          where: { 
-            associationId: parseInt(associationId),
-            status: ['pending', 'under_review']
-          }
-        }),
-        ExpenseRequest.count({
-          where: { 
-            associationId: parseInt(associationId),
-            status: 'approved'
-          }
-        }),
-        ExpenseRequest.count({
-          where: { 
-            associationId: parseInt(associationId),
-            status: 'paid'
-          }
-        }),
-        ExpenseRequest.findOne({
-          where: { 
-            associationId: parseInt(associationId),
-            status: 'paid'
-          },
-          attributes: [
-            [ExpenseRequest.sequelize.fn('SUM', ExpenseRequest.sequelize.col('amount_approved')), 'total']
-          ],
-          raw: true
-        })
-      ]);
-      
-      return {
-        pending,
-        approved,
-        paid,
-        totalAmountPaid: parseFloat(totalAmount?.total || 0)
-      };
-      
-    } catch (error) {
-      console.error('Erreur calcul summary:', error);
-      return null;
-    }
-  }
-  
-  /**
-   * 📋 Demandes en attente de validation pour cet utilisateur
-   */
-  async getPendingValidations(req, res) {
-    try {
-      const { associationId } = req.params;
-      const userId = req.user.id;
-      const membership = req.membership;
-      
-      // Déterminer rôle validateur
-      const userRoles = membership.roles || [];
-      const association = await Association.findByPk(associationId);
-      const bureauCentral = association.bureauCentral || {};
-      
-      let validatorRole = null;
-      if (userRoles.includes('president') || Object.values(bureauCentral).find(m => m.userId === userId && m.role.includes('Président'))) {
-        validatorRole = 'president';
-      } else if (userRoles.includes('tresorier') || Object.values(bureauCentral).find(m => m.userId === userId && m.role.includes('Trésorier'))) {
-        validatorRole = 'tresorier';
-      } else if (userRoles.includes('secretaire') || Object.values(bureauCentral).find(m => m.userId === userId && m.role.includes('Secrétaire'))) {
-        validatorRole = 'secretaire';
-      }
-      
-      // Récupérer demandes où ce rôle est requis et pas encore validé
-      const pendingRequests = await ExpenseRequest.findAll({
-        where: {
-          associationId: parseInt(associationId),
-          status: ['pending', 'under_review'],
-          requiredValidators: {
-            [Op.contains]: [validatorRole]
-          }
-        },
+      // 📊 RECHARGER AVEC RELATIONS
+      const finalRequest = await ExpenseRequest.findByPk(updatedRequest.id, {
         include: [
           {
             model: User,
             as: 'requester',
             attributes: ['id', 'firstName', 'lastName']
+          },
+          {
+            model: User,
+            as: 'beneficiary',
+            attributes: ['id', 'firstName', 'lastName']
           }
-        ],
-        order: [['urgencyLevel', 'DESC'], ['createdAt', 'ASC']]
-      });
-      
-      // Filtrer celles pas encore validées par ce user/rôle
-      const filtered = pendingRequests.filter(req => {
-        const history = req.validationHistory || [];
-        return !history.some(v => v.userId === userId || v.role === validatorRole);
+        ]
       });
       
       res.json({
-        pendingValidations: filtered.map(req => ({
-          id: req.id,
-          title: req.title,
-          expenseType: req.expenseType,
-          amountRequested: req.amountRequested,
-          urgencyLevel: req.urgencyLevel,
-          requester: req.requester,
-          createdAt: req.createdAt,
-          validationProgress: req.getValidationProgress()
-        })),
-        count: filtered.length,
-        validatorRole
+        message: 'Demande modifiée avec succès',
+        expenseRequest: {
+          ...finalRequest.toJSON(),
+          validationProgress: finalRequest.getValidationProgress()
+        }
       });
       
     } catch (error) {
-      console.error('Erreur récupération validations en attente:', error);
-      res.status(500).json({ error: 'Erreur lors de la récupération' });
+      console.error('Erreur modification demande dépense:', error);
+      res.status(500).json({ 
+        error: 'Erreur lors de la modification' 
+      });
     }
   }
   
   /**
-   * 📜 Historique des validations pour une demande
+   * ❌ Annuler/supprimer demande
    */
-  async getValidationHistory(req, res) {
+  async cancelExpenseRequest(req, res) {
     try {
       const { associationId, requestId } = req.params;
+      const userId = req.user.id;
+      const membership = req.membership;
+      const { reason } = req.body;
       
       const expenseRequest = await ExpenseRequest.findOne({
         where: {
@@ -888,661 +523,207 @@ class ExpenseRequestController {
       });
       
       if (!expenseRequest) {
-        return res.status(404).json({ error: 'Demande non trouvée' });
+        return res.status(404).json({
+          error: 'Demande non trouvée',
+          code: 'EXPENSE_REQUEST_NOT_FOUND'
+        });
       }
       
-      const validationHistory = expenseRequest.validationHistory || [];
-      
-      // Enrichir avec infos utilisateurs
-      const enrichedHistory = await Promise.all(
-        validationHistory.map(async (validation) => {
-          const user = await User.findByPk(validation.userId, {
-            attributes: ['id', 'firstName', 'lastName']
-          });
-          
-          return {
-            ...validation,
-            user
-          };
-        })
+      // 🔐 CONTRÔLE DROITS ANNULATION
+      const userRoles = membership?.roles || [];
+      const isBureauMember = userRoles.some(role => 
+        ['president', 'tresorier', 'secretaire'].includes(role)
       );
+      const isRequester = expenseRequest.requesterId === userId;
+      
+      if (!isRequester && !isBureauMember) {
+        return res.status(403).json({
+          error: 'Droits insuffisants pour annuler cette demande',
+          code: 'INSUFFICIENT_RIGHTS'
+        });
+      }
+      
+      // ✅ VÉRIFIER SI ANNULABLE
+      if (['paid', 'cancelled'].includes(expenseRequest.status)) {
+        return res.status(400).json({
+          error: 'Cette demande ne peut pas être annulée',
+          code: 'NOT_CANCELLABLE',
+          details: { status: expenseRequest.status }
+        });
+      }
+      
+      // 🔄 ANNULATION
+      await expenseRequest.update({
+        status: 'cancelled',
+        rejectionReason: reason || `Annulée par ${isRequester ? 'demandeur' : 'bureau'}`,
+        metadata: {
+          ...expenseRequest.metadata,
+          cancelledBy: userId,
+          cancelledAt: new Date(),
+          cancelReason: reason
+        }
+      }, { userId });
       
       res.json({
-        validationHistory: enrichedHistory,
-        requiredValidators: expenseRequest.requiredValidators,
-        currentStatus: expenseRequest.status,
-        validationProgress: expenseRequest.getValidationProgress()
+        message: 'Demande annulée avec succès',
+        expenseRequest: {
+          id: expenseRequest.id,
+          status: 'cancelled'
+        }
       });
       
     } catch (error) {
+      console.error('Erreur annulation demande dépense:', error);
+      res.status(500).json({ 
+        error: 'Erreur lors de l\'annulation' 
+      });
+    }
+  }
+  
+  
+  /**
+   * ⚖️ Valider/rejeter/demander infos pour une demande
+   */
+  async validateExpenseRequest(req, res) {
+    try {
+      // TODO: Implémenter logique validation
+      res.status(501).json({ 
+        error: 'Fonctionnalité en cours de développement',
+        code: 'NOT_IMPLEMENTED'
+      });
+    } catch (error) {
+      console.error('Erreur validation demande:', error);
+      res.status(500).json({ error: 'Erreur serveur' });
+    }
+  }
+  
+  /**
+   * 📋 Demandes en attente de validation
+   */
+  async getPendingValidations(req, res) {
+    try {
+      // TODO: Implémenter logique demandes en attente
+      res.status(501).json({ 
+        error: 'Fonctionnalité en cours de développement',
+        code: 'NOT_IMPLEMENTED'
+      });
+    } catch (error) {
+      console.error('Erreur demandes en attente:', error);
+      res.status(500).json({ error: 'Erreur serveur' });
+    }
+  }
+  
+  /**
+   * 📜 Historique des validations
+   */
+  async getValidationHistory(req, res) {
+    try {
+      // TODO: Implémenter historique validations
+      res.status(501).json({ 
+        error: 'Fonctionnalité en cours de développement',
+        code: 'NOT_IMPLEMENTED'
+      });
+    } catch (error) {
       console.error('Erreur historique validations:', error);
-      res.status(500).json({ error: 'Erreur lors de la récupération' });
+      res.status(500).json({ error: 'Erreur serveur' });
     }
   }
   
   /**
    * 💳 Confirmer paiement manuel
    */
-   async processPayment(req, res) {
+  async processPayment(req, res) {
     try {
-      const { associationId, requestId } = req.params;
-      const userId = req.user.id;
-      const {
-        paymentMode = 'manual',
-        paymentMethod,
-        manualPaymentReference,
-        manualPaymentDetails,
-        paymentDate,
-        notes
-      } = req.body;
-      
-      const expenseRequest = await ExpenseRequest.findOne({
-        where: {
-          id: parseInt(requestId),
-          associationId: parseInt(associationId)
-        }
+      // TODO: Implémenter confirmation paiement
+      res.status(501).json({ 
+        error: 'Fonctionnalité en cours de développement',
+        code: 'NOT_IMPLEMENTED'
       });
-      
-      if (!expenseRequest) {
-        return res.status(404).json({ error: 'Demande non trouvée' });
-      }
-      
-      if (expenseRequest.status !== 'approved') {
-        return res.status(400).json({
-          error: 'Seules les demandes approuvées peuvent être payées',
-          currentStatus: expenseRequest.status
-        });
-      }
-      
-      // Vérifier fonds disponibles
-      const fundsCheck = await AssociationBalanceService.checkSufficientFunds(
-        parseInt(associationId),
-        expenseRequest.amountApproved || expenseRequest.amountRequested
-      );
-      
-      if (!fundsCheck.sufficient) {
-        return res.status(400).json({
-          error: 'Fonds insuffisants',
-          availableBalance: fundsCheck.availableBalance,
-          requestedAmount: expenseRequest.amountApproved || expenseRequest.amountRequested
-        });
-      }
-      
-      // Créer Transaction manuelle
-      const transaction = await Transaction.create({
-        userId: expenseRequest.beneficiaryId || expenseRequest.requesterId,
-        associationId: parseInt(associationId),
-        type: expenseRequest.expenseType,
-        amount: expenseRequest.amountApproved || expenseRequest.amountRequested,
-        currency: expenseRequest.currency,
-        status: 'completed',
-        description: `Paiement: ${expenseRequest.title}`,
-        source: 'manual',
-        manualReference: manualPaymentReference,
-        metadata: {
-          expenseRequestId: expenseRequest.id,
-          paymentDetails: manualPaymentDetails
-        }
-      });
-      
-      // Mettre à jour demande
-      await expenseRequest.update({
-        status: 'paid',
-        paymentMode,
-        paymentMethod,
-        manualPaymentReference,
-        manualPaymentDetails,
-        paymentValidatedBy: userId,
-        transactionId: transaction.id,
-        paidAt: paymentDate ? new Date(paymentDate) : new Date(),
-        internalNotes: notes
-      }, { userId });
-      
-      res.json({
-        message: 'Paiement confirmé avec succès',
-        transaction: {
-          id: transaction.id,
-          amount: transaction.amount,
-          reference: manualPaymentReference
-        }
-      });
-      
     } catch (error) {
-      console.error('Erreur traitement paiement:', error);
-      res.status(500).json({ error: 'Erreur lors du traitement du paiement' });
+      console.error('Erreur paiement:', error);
+      res.status(500).json({ error: 'Erreur serveur' });
     }
   }
   
   /**
-   * 🔄 Mettre à jour statut paiement
+   * 🔄 Lister remboursements prêt
    */
-   async updatePaymentStatus(req, res) {
+  async getRepayments(req, res) {
     try {
-      const { associationId, requestId } = req.params;
-      const { status, failureReason, notes } = req.body;
-      const userId = req.user.id;
-      
-      const expenseRequest = await ExpenseRequest.findOne({
-        where: {
-          id: parseInt(requestId),
-          associationId: parseInt(associationId)
-        }
+      // TODO: Implémenter liste remboursements
+      res.status(501).json({ 
+        error: 'Fonctionnalité en cours de développement',
+        code: 'NOT_IMPLEMENTED'
       });
-      
-      if (!expenseRequest) {
-        return res.status(404).json({ error: 'Demande non trouvée' });
-      }
-      
-      const updateData = { status };
-      
-      if (status === 'payment_failed') {
-        updateData.metadata = {
-          ...expenseRequest.metadata,
-          paymentFailure: {
-            reason: failureReason,
-            timestamp: new Date(),
-            reportedBy: userId
-          }
-        };
-      }
-      
-      if (notes) {
-        updateData.internalNotes = notes;
-      }
-      
-      await expenseRequest.update(updateData, { userId });
-      
-      res.json({
-        message: 'Statut paiement mis à jour',
-        status: status
-      });
-      
     } catch (error) {
-      console.error('Erreur mise à jour statut paiement:', error);
-      res.status(500).json({ error: 'Erreur lors de la mise à jour' });
+      console.error('Erreur remboursements:', error);
+      res.status(500).json({ error: 'Erreur serveur' });
     }
   }
   
   /**
-   * 🔄 Statut remboursement prêt
+   * 💰 Enregistrer remboursement prêt
    */
-   async getLoanStatus(req, res) {
+  async recordRepayment(req, res) {
     try {
-      const { associationId, requestId } = req.params;
-      
-      const expenseRequest = await ExpenseRequest.findOne({
-        where: {
-          id: parseInt(requestId),
-          associationId: parseInt(associationId),
-          isLoan: true
-        }
+      // TODO: Implémenter enregistrement remboursement
+      res.status(501).json({ 
+        error: 'Fonctionnalité en cours de développement',
+        code: 'NOT_IMPLEMENTED'
       });
-      
-      if (!expenseRequest) {
-        return res.status(404).json({ error: 'Prêt non trouvé' });
-      }
-      
-      // Récupérer remboursements
-      const repayments = await LoanRepayment.findAll({
-        where: { expenseRequestId: expenseRequest.id },
-        order: [['paymentDate', 'DESC']]
-      });
-      
-      const loanAmount = parseFloat(expenseRequest.amountApproved || expenseRequest.amountRequested);
-      const totalRepaid = repayments
-        .filter(r => r.status === 'validated')
-        .reduce((sum, r) => sum + parseFloat(r.amount), 0);
-      
-      const remainingBalance = loanAmount - totalRepaid;
-      
-      // Prochaines échéances
-      const upcomingPayments = await LoanRepayment.findAll({
-        where: {
-          expenseRequestId: expenseRequest.id,
-          status: 'pending',
-          dueDate: { [Op.gte]: new Date() }
-        },
-        order: [['dueDate', 'ASC']],
-        limit: 3
-      });
-      
-      // Retards
-      const latePayments = await LoanRepayment.findAll({
-        where: {
-          expenseRequestId: expenseRequest.id,
-          status: 'pending',
-          dueDate: { [Op.lt]: new Date() }
-        }
-      });
-      
-      res.json({
-        loan: {
-          id: expenseRequest.id,
-          originalAmount: loanAmount,
-          totalRepaid,
-          remainingBalance,
-          repaymentStatus: expenseRequest.repaymentStatus,
-          loanTerms: expenseRequest.loanTerms
-        },
-        upcomingPayments: upcomingPayments.map(p => ({
-          id: p.id,
-          amount: p.amount,
-          dueDate: p.dueDate,
-          installmentNumber: p.installmentNumber
-        })),
-        latePayments: latePayments.map(p => ({
-          id: p.id,
-          amount: p.amount,
-          dueDate: p.dueDate,
-          daysLate: Math.floor((new Date() - new Date(p.dueDate)) / (1000 * 60 * 60 * 24))
-        })),
-        completionPercentage: Math.round((totalRepaid / loanAmount) * 100)
-      });
-      
-    } catch (error) {
-      console.error('Erreur statut prêt:', error);
-      res.status(500).json({ error: 'Erreur lors de la récupération du statut' });
-    }
-  }
-  
-  /**
-   * 💰 Enregistrer remboursement de prêt
-   */
-   async recordRepayment(req, res) {
-    try {
-      const { associationId, requestId } = req.params;
-      const userId = req.user.id;
-      const {
-        amount,
-        paymentDate,
-        paymentMethod,
-        manualReference,
-        notes,
-        installmentNumber
-      } = req.body;
-      
-      const expenseRequest = await ExpenseRequest.findOne({
-        where: {
-          id: parseInt(requestId),
-          associationId: parseInt(associationId),
-          isLoan: true
-        }
-      });
-      
-      if (!expenseRequest) {
-        return res.status(404).json({ error: 'Prêt non trouvé' });
-      }
-      
-      // Créer remboursement
-      const repayment = await LoanRepayment.create({
-        expenseRequestId: expenseRequest.id,
-        amount: parseFloat(amount),
-        paymentDate: new Date(paymentDate),
-        paymentMethod,
-        manualReference,
-        notes,
-        installmentNumber,
-        principalAmount: parseFloat(amount), // Simplifié pour l'instant
-        interestAmount: 0,
-        status: 'validated',
-        validatedBy: userId,
-        validatedAt: new Date()
-      });
-      
-      // Créer Transaction entrante
-      const transaction = await Transaction.create({
-        userId: expenseRequest.beneficiaryId || expenseRequest.requesterId,
-        associationId: parseInt(associationId),
-        type: 'remboursement',
-        amount: parseFloat(amount),
-        currency: expenseRequest.currency,
-        status: 'completed',
-        description: `Remboursement prêt: ${expenseRequest.title}`,
-        source: 'manual',
-        manualReference,
-        metadata: {
-          loanRepaymentId: repayment.id,
-          expenseRequestId: expenseRequest.id
-        }
-      });
-      
-      await repayment.update({ transactionId: transaction.id });
-      
-      res.json({
-        message: 'Remboursement enregistré avec succès',
-        repayment: {
-          id: repayment.id,
-          amount: repayment.amount,
-          paymentDate: repayment.paymentDate,
-          status: repayment.status
-        }
-      });
-      
     } catch (error) {
       console.error('Erreur enregistrement remboursement:', error);
-      res.status(500).json({ error: 'Erreur lors de l\'enregistrement' });
+      res.status(500).json({ error: 'Erreur serveur' });
     }
   }
   
   /**
-   * 📜 Historique remboursements prêt
+   * 📊 Statistiques dépenses
    */
-   async getRepaymentHistory(req, res) {
+  async getExpenseStatistics(req, res) {
     try {
-      const { associationId, requestId } = req.params;
-      
-      const expenseRequest = await ExpenseRequest.findOne({
-        where: {
-          id: parseInt(requestId),
-          associationId: parseInt(associationId),
-          isLoan: true
-        }
+      // TODO: Implémenter statistiques
+      res.status(501).json({ 
+        error: 'Fonctionnalité en cours de développement',
+        code: 'NOT_IMPLEMENTED'
       });
-      
-      if (!expenseRequest) {
-        return res.status(404).json({ error: 'Prêt non trouvé' });
-      }
-      
-      const repayments = await LoanRepayment.findAll({
-        where: { expenseRequestId: expenseRequest.id },
-        include: [
-          {
-            model: User,
-            as: 'validator',
-            attributes: ['id', 'firstName', 'lastName']
-          }
-        ],
-        order: [['paymentDate', 'DESC']]
-      });
-      
-      res.json({
-        repayments: repayments.map(r => ({
-          id: r.id,
-          amount: r.amount,
-          paymentDate: r.paymentDate,
-          dueDate: r.dueDate,
-          paymentMethod: r.paymentMethod,
-          status: r.status,
-          installmentNumber: r.installmentNumber,
-          daysLate: r.daysLate,
-          validator: r.validator,
-          notes: r.notes,
-          createdAt: r.createdAt
-        }))
-      });
-      
     } catch (error) {
-      console.error('Erreur historique remboursements:', error);
-      res.status(500).json({ error: 'Erreur lors de la récupération' });
+      console.error('Erreur statistiques:', error);
+      res.status(500).json({ error: 'Erreur serveur' });
     }
   }
   
   /**
-   * 📊 Statistiques dépenses association
+   * 📈 Résumé financier complet
    */
-   async getExpenseStatistics(req, res) {
+  async getFinancialSummary(req, res) {
     try {
-      const { associationId } = req.params;
-      const { period = 'all', groupBy = 'type', includeLoans = 'true' } = req.query;
-      
-      let whereClause = { associationId: parseInt(associationId) };
-      
-      // Filtre période
-      if (period !== 'all') {
-        const periodMap = { month: 30, quarter: 90, year: 365 };
-        const days = periodMap[period] || 30;
-        const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-        
-        whereClause.createdAt = { [Op.gte]: startDate };
-      }
-      
-      // Inclure/exclure prêts
-      if (includeLoans === 'false') {
-        whereClause.isLoan = false;
-      }
-      
-      // Stats par type
-      const statsByType = await ExpenseRequest.findAll({
-        where: { ...whereClause, status: 'paid' },
-        attributes: [
-          'expenseType',
-          [ExpenseRequest.sequelize.fn('COUNT', ExpenseRequest.sequelize.col('id')), 'count'],
-          [ExpenseRequest.sequelize.fn('SUM', ExpenseRequest.sequelize.col('amount_approved')), 'totalAmount'],
-          [ExpenseRequest.sequelize.fn('AVG', ExpenseRequest.sequelize.col('amount_approved')), 'avgAmount']
-        ],
-        group: ['expenseType'],
-        raw: true
+      // TODO: Implémenter résumé financier
+      res.status(501).json({ 
+        error: 'Fonctionnalité en cours de développement',
+        code: 'NOT_IMPLEMENTED'
       });
-      
-      // Stats par statut
-      const statsByStatus = await ExpenseRequest.findAll({
-        where: whereClause,
-        attributes: [
-          'status',
-          [ExpenseRequest.sequelize.fn('COUNT', ExpenseRequest.sequelize.col('id')), 'count']
-        ],
-        group: ['status'],
-        raw: true
-      });
-      
-      // Évolution mensuelle (12 derniers mois)
-      const monthlyEvolution = await this.getMonthlyExpenseEvolution(associationId);
-      
-      res.json({
-        period,
-        statsByType: statsByType.map(s => ({
-          type: s.expenseType,
-          count: parseInt(s.count),
-          totalAmount: parseFloat(s.totalAmount || 0),
-          avgAmount: parseFloat(s.avgAmount || 0)
-        })),
-        statsByStatus: statsByStatus.map(s => ({
-          status: s.status,
-          count: parseInt(s.count)
-        })),
-        monthlyEvolution
-      });
-      
     } catch (error) {
-      console.error('Erreur statistiques dépenses:', error);
-      res.status(500).json({ error: 'Erreur lors du calcul des statistiques' });
+      console.error('Erreur résumé financier:', error);
+      res.status(500).json({ error: 'Erreur serveur' });
     }
   }
   
   /**
-   * 💰 Solde et situation financière association
+   * 📄 Export comptable
    */
- async getAssociationBalance(req, res) {
+  async exportExpenseData(req, res) {
     try {
-      const { associationId } = req.params;
-      const { includeProjections = 'false', period = 'month' } = req.query;
-      
-      // Utiliser le service de calcul solde
-      const balance = await AssociationBalanceService.getFinancialSummary(
-        parseInt(associationId),
-        { 
-          period, 
-          includeProjections: includeProjections === 'true' 
-        }
-      );
-      
-      // Alertes financières
-      const alerts = await AssociationBalanceService.getFinancialAlerts(parseInt(associationId));
-      
-      // Historique évolution
-      const balanceHistory = await AssociationBalanceService.getBalanceHistory(parseInt(associationId), 6);
-      
-      res.json({
-        ...balance,
-        alerts,
-        balanceHistory
+      // TODO: Implémenter export
+      res.status(501).json({ 
+        error: 'Fonctionnalité en cours de développement',
+        code: 'NOT_IMPLEMENTED'
       });
-      
     } catch (error) {
-      console.error('Erreur solde association:', error);
-      res.status(500).json({ error: 'Erreur lors du calcul du solde' });
+      console.error('Erreur export:', error);
+      res.status(500).json({ error: 'Erreur serveur' });
     }
-  }
-  
-  /**
-   * 📤 Export comptable des dépenses
-   */
-   async exportExpenseData(req, res) {
-    try {
-      const { associationId } = req.params;
-      const { format = 'excel', dateFrom, dateTo, includeDetails = 'true', expenseTypes } = req.query;
-      
-      let whereClause = {
-        associationId: parseInt(associationId),
-        status: 'paid',
-        createdAt: {
-          [Op.between]: [new Date(dateFrom), new Date(dateTo)]
-        }
-      };
-      
-      if (expenseTypes) {
-        whereClause.expenseType = expenseTypes.split(',').map(t => t.trim());
-      }
-      
-      const expenses = await ExpenseRequest.findAll({
-        where: whereClause,
-        include: [
-          {
-            model: User,
-            as: 'requester',
-            attributes: ['firstName', 'lastName']
-          },
-          {
-            model: User,
-            as: 'beneficiary',
-            attributes: ['firstName', 'lastName']
-          }
-        ],
-        order: [['paidAt', 'DESC']]
-      });
-      
-      // Préparer données export
-      const exportData = expenses.map(exp => ({
-        Date: exp.paidAt?.toISOString().split('T')[0],
-        Type: exp.expenseType,
-        'Sous-type': exp.expenseSubtype || '',
-        Titre: exp.title,
-        Montant: exp.amountApproved || exp.amountRequested,
-        Devise: exp.currency,
-        Demandeur: `${exp.requester.firstName} ${exp.requester.lastName}`,
-        Bénéficiaire: exp.beneficiary ? 
-          `${exp.beneficiary.firstName} ${exp.beneficiary.lastName}` : 
-          exp.beneficiaryExternal?.name || '',
-        'Méthode paiement': exp.paymentMethod,
-        Référence: exp.manualPaymentReference || '',
-        'Est un prêt': exp.isLoan ? 'Oui' : 'Non'
-      }));
-      
-      if (format === 'csv') {
-        // Générer CSV
-        const csv = this.generateCSV(exportData);
-        res.setHeader('Content-Type', 'text/csv');
-        res.setHeader('Content-Disposition', `attachment; filename="depenses_${dateFrom}_${dateTo}.csv"`);
-        res.send(csv);
-      } else {
-        // Pour Excel/PDF - à implémenter avec bibliothèques spécialisées
-        res.json({
-          message: 'Export Excel/PDF à implémenter',
-          data: exportData,
-          count: exportData.length
-        });
-      }
-      
-    } catch (error) {
-      console.error('Erreur export données:', error);
-      res.status(500).json({ error: 'Erreur lors de l\'export' });
-    }
-  }
-  
-  /**
-   * 📄 Upload document justificatif
-   */
-   async uploadDocument(req, res) {
-    try {
-      // TODO: Implémenter upload Cloudinary
-      res.json({ message: 'Upload document à implémenter avec Cloudinary' });
-    } catch (error) {
-      console.error('Erreur upload document:', error);
-      res.status(500).json({ error: 'Erreur lors de l\'upload' });
-    }
-  }
-  
-  /**
-   * 🗑️ Supprimer document
-   */
-  async deleteDocument(req, res) {
-    try {
-      // TODO: Implémenter suppression document + Cloudinary
-      res.json({ message: 'Suppression document à implémenter' });
-    } catch (error) {
-      console.error('Erreur suppression document:', error);
-      res.status(500).json({ error: 'Erreur lors de la suppression' });
-    }
-  }
-  
-  /**
-   * 📈 Évolution mensuelle des dépenses (utilitaire)
-   */
-  async getMonthlyExpenseEvolution(associationId, months = 12) {
-    const startDate = new Date();
-    startDate.setMonth(startDate.getMonth() - months);
-    
-    const evolution = [];
-    
-    for (let i = 0; i < months; i++) {
-      const monthStart = new Date(startDate);
-      monthStart.setMonth(startDate.getMonth() + i);
-      const monthEnd = new Date(monthStart);
-      monthEnd.setMonth(monthEnd.getMonth() + 1);
-      
-      const monthlyExpenses = await ExpenseRequest.findOne({
-        where: {
-          associationId,
-          status: 'paid',
-          paidAt: {
-            [Op.between]: [monthStart, monthEnd]
-          }
-        },
-        attributes: [
-          [ExpenseRequest.sequelize.fn('COUNT', ExpenseRequest.sequelize.col('id')), 'count'],
-          [ExpenseRequest.sequelize.fn('SUM', ExpenseRequest.sequelize.col('amount_approved')), 'total']
-        ],
-        raw: true
-      });
-      
-      evolution.push({
-        month: monthStart.toISOString().substring(0, 7),
-        count: parseInt(monthlyExpenses?.count || 0),
-        totalAmount: parseFloat(monthlyExpenses?.total || 0)
-      });
-    }
-    
-    return evolution;
-  }
-  
-  /**
-   * 📄 Générer CSV (utilitaire)
-   */
-  static generateCSV(data) {
-    if (!data.length) return '';
-    
-    const headers = Object.keys(data[0]);
-    const csvContent = [
-      headers.join(','),
-      ...data.map(row => 
-        headers.map(header => 
-          `"${String(row[header] || '').replace(/"/g, '""')}"`
-        ).join(',')
-      )
-    ].join('\n');
-    
-    return csvContent;
   }
 }
 
-module.exports = ExpenseRequestController;
+module.exports = new ExpenseRequestController();

@@ -4,12 +4,33 @@
 const express = require('express');
 const router = express.Router();
 const { body, param, query } = require('express-validator');
-const { authMiddleware, checkRole } = require('../../../core/auth/middleware/auth');
+const { authenticate: authMiddleware } = require('../../../core/auth/middleware/auth');
 const { handleValidationErrors } = require('../../../core/middleware/validation');
 const expenseRequestController = require('../controllers/expenseRequestController');
-// Ajoutez après la ligne 10 (après l'import du controller)
-console.log('Controller methods:', Object.getOwnPropertyNames(expenseRequestController));
-console.log('validateExpenseRequest exists:', typeof expenseRequestController.validateExpenseRequest);
+
+
+// Ajoutez ces lignes au début de votre fichier expenseRequests.js, juste après les imports
+
+console.log('🔍 Debug imports...');
+console.log('authMiddleware:', typeof authMiddleware);
+console.log('handleValidationErrors:', typeof handleValidationErrors);
+
+try {
+  const controller = require('../controllers/expenseRequestController');
+  console.log('✅ Controller importé');
+  console.log('createExpenseRequest:', typeof controller.createExpenseRequest);
+} catch (error) {
+  console.error('❌ Erreur import controller:', error.message);
+}
+
+try {
+  const balanceService = require('../services/associationBalanceService');
+  console.log('✅ BalanceService importé');
+} catch (error) {
+  console.error('❌ Erreur import BalanceService:', error.message);
+  console.error('Le service n\'existe probablement pas encore');
+}
+
 // 🔐 MIDDLEWARE PERMISSIONS
 const checkAssociationMember = async (req, res, next) => {
   try {
@@ -34,6 +55,7 @@ const checkAssociationMember = async (req, res, next) => {
     req.membership = membership;
     next();
   } catch (error) {
+    console.error('Erreur vérification membre:', error);
     res.status(500).json({ error: 'Erreur vérification membre' });
   }
 };
@@ -45,7 +67,10 @@ const checkValidationRights = async (req, res, next) => {
     
     const association = await Association.findByPk(associationId);
     if (!association) {
-      return res.status(404).json({ error: 'Association non trouvée' });
+      return res.status(404).json({ 
+        error: 'Association non trouvée',
+        code: 'ASSOCIATION_NOT_FOUND'
+      });
     }
     
     // Vérifier si user peut valider selon workflowRules ou rôles bureau
@@ -68,12 +93,17 @@ const checkValidationRights = async (req, res, next) => {
     req.canValidate = true;
     next();
   } catch (error) {
+    console.error('Erreur vérification droits validation:', error);
     res.status(500).json({ error: 'Erreur vérification droits' });
   }
 };
 
 // 📋 VALIDATIONS
 const validateCreateExpenseRequest = [
+  param('associationId')
+    .isInt({ min: 1 })
+    .withMessage('ID association invalide'),
+    
   body('expenseType')
     .isIn(['aide_membre', 'depense_operationnelle', 'pret_partenariat', 'projet_special', 'urgence_communautaire'])
     .withMessage('Type de dépense invalide'),
@@ -122,16 +152,24 @@ const validateCreateExpenseRequest = [
     .isObject()
     .withMessage('Conditions prêt doivent être un objet'),
     
-  body('expectedImpact')
+  body('documents')
     .optional()
-    .trim()
-    .isLength({ max: 1000 })
-    .withMessage('Impact attendu max 1000 caractères'),
+    .isArray()
+    .withMessage('Documents doivent être un tableau'),
+    
+  body('externalReferences')
+    .optional()
+    .isObject()
+    .withMessage('Références externes doivent être un objet'),
     
   handleValidationErrors
 ];
 
 const validateUpdateExpenseRequest = [
+  param('associationId')
+    .isInt({ min: 1 })
+    .withMessage('ID association invalide'),
+    
   param('requestId')
     .isInt({ min: 1 })
     .withMessage('ID demande invalide'),
@@ -140,13 +178,13 @@ const validateUpdateExpenseRequest = [
     .optional()
     .trim()
     .isLength({ min: 5, max: 255 })
-    .withMessage('Titre requis (5-255 caractères)'),
+    .withMessage('Titre: 5-255 caractères'),
     
   body('description')
     .optional()
     .trim()
     .isLength({ min: 20, max: 2000 })
-    .withMessage('Description requise (20-2000 caractères)'),
+    .withMessage('Description: 20-2000 caractères'),
     
   body('amountRequested')
     .optional()
@@ -162,13 +200,17 @@ const validateUpdateExpenseRequest = [
 ];
 
 const validateApprovalAction = [
+  param('associationId')
+    .isInt({ min: 1 })
+    .withMessage('ID association invalide'),
+    
   param('requestId')
     .isInt({ min: 1 })
     .withMessage('ID demande invalide'),
     
-  body('decision')
+  body('action')
     .isIn(['approve', 'reject', 'request_info'])
-    .withMessage('Décision invalide'),
+    .withMessage('Action invalide (approve, reject, request_info)'),
     
   body('comment')
     .optional()
@@ -187,15 +229,27 @@ const validateApprovalAction = [
     .isLength({ max: 1000 })
     .withMessage('Conditions max 1000 caractères'),
     
+  body('rejectionReason')
+    .if(body('action').equals('reject'))
+    .trim()
+    .isLength({ min: 10, max: 1000 })
+    .withMessage('Motif refus requis (10-1000 caractères)'),
+    
+  body('requestedInfo')
+    .if(body('action').equals('request_info'))
+    .trim()
+    .isLength({ min: 10, max: 1000 })
+    .withMessage('Informations demandées requises (10-1000 caractères)'),
+    
   handleValidationErrors
 ];
 
-// 🆔 ROUTES PRINCIPALES
+// 📝 ROUTES CRUD DEMANDES
 
 /**
  * @route POST /api/v1/associations/:associationId/expense-requests
  * @desc Créer nouvelle demande de dépense
- * @access Membres selon type (aides = tous, dépenses = bureau)
+ * @access Membres (aides) / Bureau (autres dépenses)
  */
 router.post('/:associationId/expense-requests',
   authMiddleware,
@@ -206,13 +260,17 @@ router.post('/:associationId/expense-requests',
 
 /**
  * @route GET /api/v1/associations/:associationId/expense-requests
- * @desc Lister demandes dépenses avec filtres
- * @access Membres selon permissions association
+ * @desc Lister demandes dépenses avec filtres et pagination
+ * @access Membres (selon permissions)
  */
 router.get('/:associationId/expense-requests',
   authMiddleware,
   checkAssociationMember,
   [
+    param('associationId')
+      .isInt({ min: 1 })
+      .withMessage('ID association invalide'),
+      
     query('status')
       .optional()
       .isIn(['pending', 'under_review', 'additional_info_needed', 'approved', 'rejected', 'paid', 'cancelled'])
@@ -221,12 +279,17 @@ router.get('/:associationId/expense-requests',
     query('expenseType')
       .optional()
       .isIn(['aide_membre', 'depense_operationnelle', 'pret_partenariat', 'projet_special', 'urgence_communautaire'])
-      .withMessage('Type invalide'),
+      .withMessage('Type dépense invalide'),
       
     query('requesterId')
       .optional()
       .isInt({ min: 1 })
       .withMessage('ID demandeur invalide'),
+      
+    query('beneficiaryId')
+      .optional()
+      .isInt({ min: 1 })
+      .withMessage('ID bénéficiaire invalide'),
       
     query('minAmount')
       .optional()
@@ -292,7 +355,14 @@ router.get('/:associationId/expense-requests/:requestId',
   authMiddleware,
   checkAssociationMember,
   [
-    param('requestId').isInt({ min: 1 }).withMessage('ID demande invalide'),
+    param('associationId')
+      .isInt({ min: 1 })
+      .withMessage('ID association invalide'),
+      
+    param('requestId')
+      .isInt({ min: 1 })
+      .withMessage('ID demande invalide'),
+      
     handleValidationErrors
   ],
   expenseRequestController.getExpenseRequestDetails
@@ -319,8 +389,20 @@ router.delete('/:associationId/expense-requests/:requestId',
   authMiddleware,
   checkAssociationMember,
   [
-    param('requestId').isInt({ min: 1 }).withMessage('ID demande invalide'),
-    body('reason').optional().trim().isLength({ max: 500 }).withMessage('Raison max 500 caractères'),
+    param('associationId')
+      .isInt({ min: 1 })
+      .withMessage('ID association invalide'),
+      
+    param('requestId')
+      .isInt({ min: 1 })
+      .withMessage('ID demande invalide'),
+      
+    body('reason')
+      .optional()
+      .trim()
+      .isLength({ max: 500 })
+      .withMessage('Raison max 500 caractères'),
+      
     handleValidationErrors
   ],
   expenseRequestController.cancelExpenseRequest
@@ -350,6 +432,13 @@ router.get('/:associationId/expense-requests/pending-validations',
   authMiddleware,
   checkAssociationMember,
   checkValidationRights,
+  [
+    param('associationId')
+      .isInt({ min: 1 })
+      .withMessage('ID association invalide'),
+      
+    handleValidationErrors
+  ],
   expenseRequestController.getPendingValidations
 );
 
@@ -362,7 +451,14 @@ router.get('/:associationId/expense-requests/:requestId/validation-history',
   authMiddleware,
   checkAssociationMember,
   [
-    param('requestId').isInt({ min: 1 }).withMessage('ID demande invalide'),
+    param('associationId')
+      .isInt({ min: 1 })
+      .withMessage('ID association invalide'),
+      
+    param('requestId')
+      .isInt({ min: 1 })
+      .withMessage('ID demande invalide'),
+      
     handleValidationErrors
   ],
   expenseRequestController.getValidationHistory
@@ -379,8 +475,14 @@ router.post('/:associationId/expense-requests/:requestId/pay',
   authMiddleware,
   checkAssociationMember,
   [
-    param('requestId').isInt({ min: 1 }).withMessage('ID demande invalide'),
-    
+    param('associationId')
+      .isInt({ min: 1 })
+      .withMessage('ID association invalide'),
+      
+    param('requestId')
+      .isInt({ min: 1 })
+      .withMessage('ID demande invalide'),
+      
     body('paymentMode')
       .isIn(['manual'])
       .withMessage('Mode paiement invalide'), // 'digital' ajouté plus tard
@@ -416,53 +518,28 @@ router.post('/:associationId/expense-requests/:requestId/pay',
   expenseRequestController.processPayment
 );
 
-/**
- * @route PUT /api/v1/associations/:associationId/expense-requests/:requestId/payment-status
- * @desc Mettre à jour statut paiement
- * @access Trésorier
- */
-router.put('/:associationId/expense-requests/:requestId/payment-status',
-  authMiddleware,
-  checkAssociationMember,
-  [
-    param('requestId').isInt({ min: 1 }).withMessage('ID demande invalide'),
-    
-    body('status')
-      .isIn(['paid', 'payment_failed', 'cancelled'])
-      .withMessage('Statut invalide'),
-      
-    body('failureReason')
-      .optional()
-      .trim()
-      .isLength({ max: 500 })
-      .withMessage('Motif échec max 500 caractères'),
-      
-    body('notes')
-      .optional()
-      .trim()
-      .isLength({ max: 1000 })
-      .withMessage('Notes max 1000 caractères'),
-      
-    handleValidationErrors
-  ],
-  expenseRequestController.updatePaymentStatus
-);
-
-// 🔄 ROUTES SUIVI PRÊTS
+// 🔄 ROUTES REMBOURSEMENTS (PRÊTS)
 
 /**
- * @route GET /api/v1/associations/:associationId/expense-requests/:requestId/loan-status
- * @desc Statut remboursement prêt
+ * @route GET /api/v1/associations/:associationId/expense-requests/:requestId/repayments
+ * @desc Lister remboursements d'un prêt
  * @access Bureau + Bénéficiaire
  */
-router.get('/:associationId/expense-requests/:requestId/loan-status',
+router.get('/:associationId/expense-requests/:requestId/repayments',
   authMiddleware,
   checkAssociationMember,
   [
-    param('requestId').isInt({ min: 1 }).withMessage('ID demande invalide'),
+    param('associationId')
+      .isInt({ min: 1 })
+      .withMessage('ID association invalide'),
+      
+    param('requestId')
+      .isInt({ min: 1 })
+      .withMessage('ID demande invalide'),
+      
     handleValidationErrors
   ],
-  expenseRequestController.getLoanStatus
+  expenseRequestController.getRepayments
 );
 
 /**
@@ -474,11 +551,17 @@ router.post('/:associationId/expense-requests/:requestId/repayments',
   authMiddleware,
   checkAssociationMember,
   [
-    param('requestId').isInt({ min: 1 }).withMessage('ID demande invalide'),
-    
+    param('associationId')
+      .isInt({ min: 1 })
+      .withMessage('ID association invalide'),
+      
+    param('requestId')
+      .isInt({ min: 1 })
+      .withMessage('ID demande invalide'),
+      
     body('amount')
       .isFloat({ min: 0.01 })
-      .withMessage('Montant remboursement invalide'),
+      .withMessage('Montant remboursement requis'),
       
     body('paymentDate')
       .isISO8601()
@@ -487,6 +570,11 @@ router.post('/:associationId/expense-requests/:requestId/repayments',
     body('paymentMethod')
       .isIn(['bank_transfer', 'card_payment', 'cash', 'check', 'mobile_money'])
       .withMessage('Méthode paiement invalide'),
+      
+    body('paymentMode')
+      .optional()
+      .isIn(['digital', 'manual'])
+      .withMessage('Mode paiement invalide'),
       
     body('manualReference')
       .optional()
@@ -500,32 +588,12 @@ router.post('/:associationId/expense-requests/:requestId/repayments',
       .isLength({ max: 1000 })
       .withMessage('Notes max 1000 caractères'),
       
-    body('installmentNumber')
-      .optional()
-      .isInt({ min: 1 })
-      .withMessage('Numéro échéance invalide'),
-      
     handleValidationErrors
   ],
   expenseRequestController.recordRepayment
 );
 
-/**
- * @route GET /api/v1/associations/:associationId/expense-requests/:requestId/repayments
- * @desc Historique remboursements prêt
- * @access Bureau + Bénéficiaire
- */
-router.get('/:associationId/expense-requests/:requestId/repayments',
-  authMiddleware,
-  checkAssociationMember,
-  [
-    param('requestId').isInt({ min: 1 }).withMessage('ID demande invalide'),
-    handleValidationErrors
-  ],
-  expenseRequestController.getRepaymentHistory
-);
-
-// 📊 ROUTES RAPPORTS & ANALYTICS
+// 📊 ROUTES STATISTIQUES & ANALYTICS
 
 /**
  * @route GET /api/v1/associations/:associationId/expense-requests/statistics
@@ -535,7 +603,12 @@ router.get('/:associationId/expense-requests/:requestId/repayments',
 router.get('/:associationId/expense-requests/statistics',
   authMiddleware,
   checkAssociationMember,
+  checkValidationRights,
   [
+    param('associationId')
+      .isInt({ min: 1 })
+      .withMessage('ID association invalide'),
+      
     query('period')
       .optional()
       .isIn(['month', 'quarter', 'year', 'all'])
@@ -543,13 +616,8 @@ router.get('/:associationId/expense-requests/statistics',
       
     query('groupBy')
       .optional()
-      .isIn(['type', 'month', 'section', 'status', 'urgency'])
+      .isIn(['type', 'month', 'section', 'status'])
       .withMessage('Groupement invalide'),
-      
-    query('includeLoans')
-      .optional()
-      .isBoolean()
-      .withMessage('includeLoans doit être boolean'),
       
     handleValidationErrors
   ],
@@ -557,27 +625,27 @@ router.get('/:associationId/expense-requests/statistics',
 );
 
 /**
- * @route GET /api/v1/associations/:associationId/expense-requests/balance
- * @desc Solde et situation financière association
+ * @route GET /api/v1/associations/:associationId/financial-summary
+ * @desc Résumé financier complet association
  * @access Bureau Central
  */
-router.get('/:associationId/expense-requests/balance',
+router.get('/:associationId/financial-summary',
   authMiddleware,
   checkAssociationMember,
+  checkValidationRights,
   [
+    param('associationId')
+      .isInt({ min: 1 })
+      .withMessage('ID association invalide'),
+      
     query('includeProjections')
       .optional()
       .isBoolean()
       .withMessage('includeProjections doit être boolean'),
       
-    query('period')
-      .optional()
-      .isIn(['month', 'quarter', 'year'])
-      .withMessage('Période invalide'),
-      
     handleValidationErrors
   ],
-  expenseRequestController.getAssociationBalance
+  expenseRequestController.getFinancialSummary
 );
 
 /**
@@ -589,6 +657,10 @@ router.get('/:associationId/expense-requests/export',
   authMiddleware,
   checkAssociationMember,
   [
+    param('associationId')
+      .isInt({ min: 1 })
+      .withMessage('ID association invalide'),
+      
     query('format')
       .optional()
       .isIn(['excel', 'csv', 'pdf'])
@@ -607,57 +679,9 @@ router.get('/:associationId/expense-requests/export',
       .isBoolean()
       .withMessage('includeDetails doit être boolean'),
       
-    query('expenseTypes')
-      .optional()
-      .custom((value) => {
-        if (typeof value === 'string') {
-          const types = value.split(',');
-          const validTypes = ['aide_membre', 'depense_operationnelle', 'pret_partenariat', 'projet_special', 'urgence_communautaire'];
-          return types.every(type => validTypes.includes(type.trim()));
-        }
-        return true;
-      })
-      .withMessage('Types dépenses invalides'),
-      
     handleValidationErrors
   ],
   expenseRequestController.exportExpenseData
-);
-
-// 📄 ROUTES DOCUMENTS
-
-/**
- * @route POST /api/v1/associations/:associationId/expense-requests/:requestId/documents
- * @desc Upload document justificatif
- * @access Demandeur + Bureau
- */
-router.post('/:associationId/expense-requests/:requestId/documents',
-  authMiddleware,
-  checkAssociationMember,
-  [
-    param('requestId').isInt({ min: 1 }).withMessage('ID demande invalide'),
-    body('documentType').trim().isLength({ min: 1, max: 50 }).withMessage('Type document requis'),
-    body('documentName').trim().isLength({ min: 1, max: 255 }).withMessage('Nom document requis'),
-    // Upload middleware Cloudinary sera ajouté ici
-    handleValidationErrors
-  ],
-  expenseRequestController.uploadDocument
-);
-
-/**
- * @route DELETE /api/v1/associations/:associationId/expense-requests/:requestId/documents/:documentId
- * @desc Supprimer document
- * @access Demandeur + Bureau
- */
-router.delete('/:associationId/expense-requests/:requestId/documents/:documentId',
-  authMiddleware,
-  checkAssociationMember,
-  [
-    param('requestId').isInt({ min: 1 }).withMessage('ID demande invalide'),
-    param('documentId').isInt({ min: 1 }).withMessage('ID document invalide'),
-    handleValidationErrors
-  ],
-  expenseRequestController.deleteDocument
 );
 
 module.exports = router;
