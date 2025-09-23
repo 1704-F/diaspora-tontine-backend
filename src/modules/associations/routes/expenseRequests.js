@@ -8,6 +8,11 @@ const { authenticate: authMiddleware } = require('../../../core/auth/middleware/
 const { handleValidationErrors } = require('../../../core/middleware/validation');
 const expenseRequestController = require('../controllers/expenseRequestController');
 
+const { 
+  checkAssociationMember, 
+  checkFinancialViewRights 
+} = require('../../../core/middleware/permissions');
+
 
 // Ajoutez ces lignes au début de votre fichier expenseRequests.js, juste après les imports
 
@@ -31,34 +36,6 @@ try {
   console.error('Le service n\'existe probablement pas encore');
 }
 
-// 🔐 MIDDLEWARE PERMISSIONS
-const checkAssociationMember = async (req, res, next) => {
-  try {
-    const { AssociationMember } = require('../../../models');
-    const { associationId } = req.params;
-    
-    const membership = await AssociationMember.findOne({
-      where: {
-        userId: req.user.id,
-        associationId: parseInt(associationId),
-        status: 'active'
-      }
-    });
-    
-    if (!membership) {
-      return res.status(403).json({
-        error: 'Accès refusé',
-        code: 'NOT_ASSOCIATION_MEMBER'
-      });
-    }
-    
-    req.membership = membership;
-    next();
-  } catch (error) {
-    console.error('Erreur vérification membre:', error);
-    res.status(500).json({ error: 'Erreur vérification membre' });
-  }
-};
 
 const checkValidationRights = async (req, res, next) => {
   try {
@@ -627,21 +604,41 @@ router.get('/:associationId/expense-requests/statistics',
 /**
  * @route GET /api/v1/associations/:associationId/financial-summary
  * @desc Résumé financier complet association
- * @access Bureau Central
+ * @access admin_association, president, tresorier, secretaire
  */
 router.get('/:associationId/financial-summary',
   authMiddleware,
   checkAssociationMember,
-  checkValidationRights,
+  checkFinancialViewRights(), // ✅ CORRECTION: Middleware financier correct
   [
     param('associationId')
       .isInt({ min: 1 })
       .withMessage('ID association invalide'),
       
+    query('period')
+      .optional()
+      .isIn(['all', 'month', 'quarter', 'year'])
+      .withMessage('Période invalide'),
+      
     query('includeProjections')
       .optional()
       .isBoolean()
       .withMessage('includeProjections doit être boolean'),
+      
+    query('includeAlerts')
+      .optional()
+      .isBoolean()
+      .withMessage('includeAlerts doit être boolean'),
+      
+    query('includeHistory')
+      .optional()
+      .isBoolean()
+      .withMessage('includeHistory doit être boolean'),
+      
+    query('historyMonths')
+      .optional()
+      .isInt({ min: 1, max: 24 })
+      .withMessage('historyMonths doit être entre 1 et 24'),
       
     handleValidationErrors
   ],
