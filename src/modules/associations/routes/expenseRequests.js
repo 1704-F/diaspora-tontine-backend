@@ -1,4 +1,4 @@
-// src/modules/associations/routes/expenseRequests.js
+// src/modules/associations/routes/expenseRequests.js - VERSION CORRIGÉE
 // Routes complètes pour gestion financière association
 
 const express = require('express');
@@ -6,76 +6,24 @@ const router = express.Router();
 const { body, param, query } = require('express-validator');
 const { authenticate: authMiddleware } = require('../../../core/auth/middleware/auth');
 const { handleValidationErrors } = require('../../../core/middleware/validation');
-const expenseRequestController = require('../controllers/expenseRequestController');
 
+// ✅ IMPORT PERMISSIONS CORRIGÉ
 const { 
   checkAssociationMember, 
-  checkFinancialViewRights 
+  checkFinancialViewRights,
+  checkFinancialValidationRights 
 } = require('../../../core/middleware/permissions');
 
+const expenseRequestController = require('../controllers/expenseRequestController');
 
-// Ajoutez ces lignes au début de votre fichier expenseRequests.js, juste après les imports
-
-console.log('🔍 Debug imports...');
-console.log('authMiddleware:', typeof authMiddleware);
-console.log('handleValidationErrors:', typeof handleValidationErrors);
-
-try {
-  const controller = require('../controllers/expenseRequestController');
-  console.log('✅ Controller importé');
-  console.log('createExpenseRequest:', typeof controller.createExpenseRequest);
-} catch (error) {
-  console.error('❌ Erreur import controller:', error.message);
-}
-
-try {
-  const balanceService = require('../services/associationBalanceService');
-  console.log('✅ BalanceService importé');
-} catch (error) {
-  console.error('❌ Erreur import BalanceService:', error.message);
-  console.error('Le service n\'existe probablement pas encore');
-}
-
-
+// ❌ SUPPRIMER ce middleware local qui fait doublon
+/*
 const checkValidationRights = async (req, res, next) => {
-  try {
-    const { Association } = require('../../../models');
-    const { associationId } = req.params;
-    
-    const association = await Association.findByPk(associationId);
-    if (!association) {
-      return res.status(404).json({ 
-        error: 'Association non trouvée',
-        code: 'ASSOCIATION_NOT_FOUND'
-      });
-    }
-    
-    // Vérifier si user peut valider selon workflowRules ou rôles bureau
-    const userRoles = req.membership?.roles || [];
-    const bureauCentral = association.bureauCentral || {};
-    
-    const canValidate = 
-      userRoles.includes('president') ||
-      userRoles.includes('tresorier') ||
-      userRoles.includes('secretaire') ||
-      Object.values(bureauCentral).some(member => member.userId === req.user.id);
-    
-    if (!canValidate) {
-      return res.status(403).json({
-        error: 'Droits insuffisants pour validation',
-        code: 'INSUFFICIENT_VALIDATION_RIGHTS'
-      });
-    }
-    
-    req.canValidate = true;
-    next();
-  } catch (error) {
-    console.error('Erreur vérification droits validation:', error);
-    res.status(500).json({ error: 'Erreur vérification droits' });
-  }
+  // Code supprimé car remplacé par checkFinancialValidationRights
 };
+*/
 
-// 📋 VALIDATIONS
+// 📋 VALIDATIONS (inchangées)
 const validateCreateExpenseRequest = [
   param('associationId')
     .isInt({ min: 1 })
@@ -243,6 +191,8 @@ router.post('/:associationId/expense-requests',
 router.get('/:associationId/expense-requests',
   authMiddleware,
   checkAssociationMember,
+  // ✅ PERMISSIONS: Ajouter vérification vue financière
+  checkFinancialViewRights(),
   [
     param('associationId')
       .isInt({ min: 1 })
@@ -395,7 +345,8 @@ router.delete('/:associationId/expense-requests/:requestId',
 router.post('/:associationId/expense-requests/:requestId/validate',
   authMiddleware,
   checkAssociationMember,
-  checkValidationRights,
+  // ✅ CORRECTION: Utiliser le middleware centralisé
+  checkFinancialValidationRights(),
   validateApprovalAction,
   expenseRequestController.validateExpenseRequest
 );
@@ -408,7 +359,8 @@ router.post('/:associationId/expense-requests/:requestId/validate',
 router.get('/:associationId/expense-requests/pending-validations',
   authMiddleware,
   checkAssociationMember,
-  checkValidationRights,
+  // ✅ CORRECTION: Utiliser le middleware centralisé
+  checkFinancialValidationRights(),
   [
     param('associationId')
       .isInt({ min: 1 })
@@ -446,11 +398,13 @@ router.get('/:associationId/expense-requests/:requestId/validation-history',
 /**
  * @route POST /api/v1/associations/:associationId/expense-requests/:requestId/pay
  * @desc Confirmer paiement (manuel pour l'instant)
- * @access Trésorier + Président
+ * @access Trésorier + Président + admin_association
  */
 router.post('/:associationId/expense-requests/:requestId/pay',
   authMiddleware,
   checkAssociationMember,
+  // ✅ CORRECTION: Utiliser validation financière pour paiements aussi
+  checkFinancialValidationRights(),
   [
     param('associationId')
       .isInt({ min: 1 })
@@ -505,6 +459,7 @@ router.post('/:associationId/expense-requests/:requestId/pay',
 router.get('/:associationId/expense-requests/:requestId/repayments',
   authMiddleware,
   checkAssociationMember,
+  checkFinancialViewRights(),
   [
     param('associationId')
       .isInt({ min: 1 })
@@ -522,11 +477,13 @@ router.get('/:associationId/expense-requests/:requestId/repayments',
 /**
  * @route POST /api/v1/associations/:associationId/expense-requests/:requestId/repayments
  * @desc Enregistrer remboursement de prêt
- * @access Trésorier
+ * @access Trésorier + admin_association
  */
 router.post('/:associationId/expense-requests/:requestId/repayments',
   authMiddleware,
   checkAssociationMember,
+  // ✅ CORRECTION: Validation financière pour remboursements
+  checkFinancialValidationRights(),
   [
     param('associationId')
       .isInt({ min: 1 })
@@ -575,12 +532,13 @@ router.post('/:associationId/expense-requests/:requestId/repayments',
 /**
  * @route GET /api/v1/associations/:associationId/expense-requests/statistics
  * @desc Statistiques dépenses association
- * @access Bureau Central
+ * @access Bureau Central avec droits finances
  */
 router.get('/:associationId/expense-requests/statistics',
   authMiddleware,
   checkAssociationMember,
-  checkValidationRights,
+  // ✅ CORRECTION: Vue financière au lieu de validation
+  checkFinancialViewRights(),
   [
     param('associationId')
       .isInt({ min: 1 })
@@ -609,7 +567,7 @@ router.get('/:associationId/expense-requests/statistics',
 router.get('/:associationId/financial-summary',
   authMiddleware,
   checkAssociationMember,
-  checkFinancialViewRights(), // ✅ CORRECTION: Middleware financier correct
+  checkFinancialViewRights(),
   [
     param('associationId')
       .isInt({ min: 1 })
@@ -648,11 +606,13 @@ router.get('/:associationId/financial-summary',
 /**
  * @route GET /api/v1/associations/:associationId/expense-requests/export
  * @desc Export comptable des dépenses
- * @access Trésorier + Président
+ * @access Trésorier + Président + admin_association
  */
 router.get('/:associationId/expense-requests/export',
   authMiddleware,
   checkAssociationMember,
+  // ✅ CORRECTION: Vue financière pour exports
+  checkFinancialViewRights(),
   [
     param('associationId')
       .isInt({ min: 1 })
