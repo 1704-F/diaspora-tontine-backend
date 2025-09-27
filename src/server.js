@@ -107,6 +107,11 @@ async function startServer() {
           console.log('   ✅ ExpenseRequest synchronisé');
         }
 
+        if (models.IncomeEntry) {
+          await models.IncomeEntry.sync({ alter: true });
+          console.log('   ✅ IncomeEntry synchronisé');
+        }
+
         if (models.LoanRepayment) {
           await models.LoanRepayment.sync({ alter: true });
           console.log('   ✅ LoanRepayment synchronisé');

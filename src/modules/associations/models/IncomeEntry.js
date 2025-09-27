@@ -341,15 +341,15 @@ module.exports = (sequelize) => {
     timestamps: true,
     
     indexes: [
-      { fields: ['associationId'] },
-      { fields: ['registeredBy'] },
-      { fields: ['incomeType'] },
-      { fields: ['sourceType'] },
-      { fields: ['receivedDate'] },
+      { fields: ['association_id'] },
+      { fields: ['registered_by'] },
+      { fields: ['income_type'] },
+      { fields: ['source_type'] },
+      { fields: ['received_date'] },
       { fields: ['status'] },
       { fields: ['amount'] },
-      { fields: ['isRecurring'] },
-      { fields: ['parentIncomeId'] }
+      { fields: ['is_recurring'] },
+      { fields: ['parent_income_id'] }
     ],
     
     hooks: {
