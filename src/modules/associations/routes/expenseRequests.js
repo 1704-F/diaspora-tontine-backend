@@ -260,7 +260,7 @@ router.get('/:associationId/expense-requests',
       
     query('sortBy')
       .optional()
-      .isIn(['createdAt', 'amountRequested', 'urgencyLevel', 'status'])
+      .isIn(['created_at', 'amountRequested', 'urgencyLevel', 'status'])
       .withMessage('Tri invalide'),
       
     query('sortOrder')

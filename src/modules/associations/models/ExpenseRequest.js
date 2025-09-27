@@ -424,11 +424,11 @@ module.exports = (sequelize) => {
     });
     
     // Documents de suivi
-    ExpenseRequest.hasMany(models.Document, {
-      foreignKey: 'relatedId',
-      scope: { relatedType: 'expense_request' },
-      as: 'relatedDocuments'
-    });
+    //ExpenseRequest.hasMany(models.Document, {
+      //foreignKey: 'relatedId',
+      //scope: { relatedType: 'expense_request' },
+      //as: 'relatedDocuments'
+    //});
     
     // Remboursements si prêt
     ExpenseRequest.hasMany(models.LoanRepayment, {

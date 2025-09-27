@@ -5,10 +5,12 @@ const associationController = require('./associationController');
 const sectionController = require('./sectionController');
 const memberController = require('./memberController');
 const expenseRequestController = require('./expenseRequestController');
+const incomeEntryController = require('./incomeEntryController');
 
 module.exports = {
   associationController,
   sectionController,
   memberController,
-  expenseRequestController
+  expenseRequestController,
+  incomeEntryController
 };

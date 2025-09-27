@@ -6,29 +6,19 @@ const router = express.Router();
 
 // Import des routes spécialisées
 const associationRoutes = require('./associationRoutes');
-const expenseRequestRoutes = require('./expenseRequests'); // ➕ NOUVEAU
-// Future routes à ajouter :
-// const sectionRoutes = require('./sectionRoutes');
-// const memberRoutes = require('./memberRoutes'); 
-// const cotisationRoutes = require('./cotisationRoutes');
+const expenseRequestRoutes = require('./expenseRequests');
+const incomeEntriesRoutes = require('./incomeEntries');
+
 
 // 📋 ASSOCIATION CRUD
 router.use('/', associationRoutes);
 
 // 💰 GESTION FINANCIÈRE - ExpenseRequests & LoanRepayments
-router.use('/', expenseRequestRoutes); // ➕ NOUVEAU
+router.use('/', expenseRequestRoutes);
 
-// 🌍 SECTIONS GÉOGRAPHIQUES (à implémenter)
-// router.use('/:associationId/sections', sectionRoutes);
+//Routes pour gestion des entrées d'argent personnalisées
+router.use('/', incomeEntriesRoutes);
 
-// 👥 GESTION MEMBRES (à implémenter) 
-// router.use('/:associationId/members', memberRoutes);
-
-// 💰 COTISATIONS & AIDES (legacy - à migrer vers expenseRequests)
-// router.use('/cotisations', cotisationRoutes);
-
-// 📊 ROUTES DE REPORTING (futures)
-// router.use('/:associationId/reports', reportRoutes);
 
 // ❤️ Route de santé du module
 router.get('/health', (req, res) => {
