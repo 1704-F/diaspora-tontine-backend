@@ -1349,6 +1349,7 @@ async createIncomeType(req, res) {
     } = req.body;
 
     const association = await Association.findByPk(parseInt(associationId));
+    
     if (!association) {
       return res.status(404).json({
         error: 'Association non trouvée',
@@ -1356,24 +1357,11 @@ async createIncomeType(req, res) {
       });
     }
 
-    // Vérifier permissions admin
-    const membership = req.membership;
-    const userRoles = membership.roles || [];
-
-    const canCreateType = 
-      userRoles.includes('admin_association') ||
-      userRoles.includes('president') ||
-      req.user.role === 'super_admin';
-
-    if (!canCreateType) {
-      return res.status(403).json({
-        error: 'Permissions insuffisantes pour créer des types',
-        code: 'INSUFFICIENT_CREATE_TYPE_RIGHTS'
-      });
-    }
-
     // Récupérer types existants
-    const currentTypes = association.incomeTypes || {};
+    let currentTypes = association.incomeTypes || {};
+    
+    // ⚠️ IMPORTANT : Créer un nouvel objet pour forcer la détection du changement
+    currentTypes = { ...currentTypes };
 
     // Vérifier que le type n'existe pas déjà
     if (currentTypes[typeName]) {
@@ -1396,15 +1384,20 @@ async createIncomeType(req, res) {
       createdAt: new Date().toISOString()
     };
 
-    // Ajouter aux types existants
+    // Ajouter le nouveau type
     currentTypes[typeName] = newType;
 
-    // Sauvegarder
-    await association.update({
-      incomeTypes: currentTypes
-    });
+    console.log('📝 Avant sauvegarde:', currentTypes);
 
-    console.log(`➕ Nouveau type d'entrée créé: ${typeName} pour association ${associationId}`);
+    // ✅ SOLUTION : Utiliser .changed() pour forcer la détection
+    association.changed('incomeTypes', true);
+    association.incomeTypes = currentTypes;
+    
+    await association.save();
+
+    // Vérifier que ça a bien été sauvegardé
+    const updated = await Association.findByPk(parseInt(associationId));
+    console.log('✅ Après sauvegarde:', updated.incomeTypes);
 
     res.status(201).json({
       success: true,
@@ -1420,7 +1413,8 @@ async createIncomeType(req, res) {
     console.error('Erreur création type entrée:', error);
     res.status(500).json({
       error: 'Erreur lors de la création du type',
-      code: 'INCOME_TYPE_CREATION_ERROR'
+      code: 'INCOME_TYPE_CREATION_ERROR',
+      details: error.message
     });
   }
 }
