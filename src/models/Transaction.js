@@ -168,7 +168,8 @@ module.exports = (sequelize, DataTypes) => {
           'versement_tontine',    // Versement tontine (bénéficiaire)
           'remboursement',        // Remboursement défaillance
           'commission',           // Commission DiasporaTontine
-          'refund'               // Remboursement client
+          'refund',
+          'income_entry'               // Remboursement client
         ]]
       },
       comment: 'Type de transaction'

@@ -477,7 +477,7 @@ async function generateReceiptNumber(associationId) {
 }
 
 async function createLinkedTransaction(incomeEntry) {
-  const { Transaction } = require('./index');
+  const { Transaction } = require('../../../models');
   
   const transaction = await Transaction.create({
     userId: incomeEntry.registeredBy,
@@ -504,7 +504,7 @@ async function createLinkedTransaction(incomeEntry) {
 
 async function updateLinkedTransaction(incomeEntry) {
   if (incomeEntry.transactionId) {
-    const { Transaction } = require('./index');
+    const { Transaction } = require('../../../models');
     await Transaction.update({
       amount: incomeEntry.amount,
       netAmount: incomeEntry.netAmount,
