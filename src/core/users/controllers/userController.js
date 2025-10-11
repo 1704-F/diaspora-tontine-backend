@@ -1,3 +1,4 @@
+// src/core/users/controllers/userController.js
 const { User, AssociationMember, TontineParticipant, Association, Tontine } = require('../../../models');
 
 class UserController {
@@ -26,13 +27,13 @@ class UserController {
           {
             model: TontineParticipant,
             as: 'tontineParticipations',
-            where: { status: ['active', 'approved'] }, // Inclure approved aussi
+            where: { status: ['active', 'approved'] },
             required: false,
             include: [
               {
                 model: Tontine,
                 as: 'tontine',
-                attributes: ['id', 'title', 'status', 'organizerId'] // title au lieu de name
+                attributes: ['id', 'title', 'status', 'organizerId']
               }
             ]
           }
@@ -46,11 +47,22 @@ class UserController {
         });
       }
 
-      // Formater les associations pour le frontend
+      // ✅ CORRECTION : Formater les associations avec RBAC complet
       const associations = user.associationMemberships?.map(membership => ({
+        // IDs
         id: membership.association.id,
+        associationId: membership.association.id, // ✅ Ajouté pour cohérence
         name: membership.association.name,
-        role: membership.memberType, // memberType au lieu de role
+        
+        // ✅ RBAC - Nouveau système
+        isAdmin: membership.isAdmin || false,
+        assignedRoles: membership.assignedRoles || [],
+        customPermissions: membership.customPermissions || { granted: [], revoked: [] },
+        
+        // Type cotisation (ex: "CDI", "Étudiant")
+        memberType: membership.memberType,
+        
+        // Status
         status: membership.status
       })) || [];
 
