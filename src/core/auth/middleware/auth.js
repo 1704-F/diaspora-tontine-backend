@@ -1,4 +1,4 @@
-// middleware/auth.js
+//src\core\auth\middleware\auth.js
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const { User, AssociationMember, TontineParticipant } = require('../../../models');

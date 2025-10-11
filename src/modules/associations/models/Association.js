@@ -1,4 +1,4 @@
-//src/modules/association/models/association.js
+//src/modules/associations/models/Association.js
 "use strict";
 const { Model } = require("sequelize");
 
@@ -76,7 +76,7 @@ module.exports = (sequelize, DataTypes) => {
       slug: {
         type: DataTypes.STRING(255),
         allowNull: false,
-        field: "slug", // Mapping explicite
+        field: "slug",
         validate: {
           isLowercase: true,
           is: /^[a-z0-9-]+$/,
@@ -148,46 +148,31 @@ module.exports = (sequelize, DataTypes) => {
         comment: "RIB principal: {iban, bic, bankName, accountHolder}",
       },
 
-      // 👥 BUREAU CENTRAL (Direction)
-      centralBoard: {
-        type: DataTypes.JSON,
+      // 🔐 SYSTÈME RBAC DYNAMIQUE - RÔLES & PERMISSIONS
+      rolesConfiguration: {
+        type: DataTypes.JSONB,
         allowNull: false,
-        defaultValue: {},
-        comment: "Président, Secrétaire, Trésorier + rôles custom",
+        defaultValue: {
+          version: '1.0',
+          roles: [],
+          availablePermissions: []
+        },
+        comment: 'Configuration complète des rôles et permissions (RBAC dynamique)'
       },
 
       // ⚙️ CONFIGURATION FLEXIBLE
       memberTypes: {
         type: DataTypes.JSON,
         allowNull: false,
-        defaultValue: {
-          etudiant: { label: "Étudiant", monthlyAmount: 20 },
-          cdi: { label: "CDI", monthlyAmount: 50 },
-          cdd: { label: "CDD", monthlyAmount: 35 },
-          non_actif: { label: "Non actif", monthlyAmount: 0 },
-          retraite: { label: "Retraité", monthlyAmount: 25 },
-        },
-        comment: "Types de membres configurables avec montants",
-      },
-
-      accessRights: {
-        type: DataTypes.JSON,
-        allowNull: false,
-        defaultValue: {
-          finances: "central_board_only",
-          membersList: "all_members",
-          statistics: "all_members",
-          calendar: "all_members",
-          expenses: "central_board_only",
-        },
-        comment: "Droits d'accès configurables par type de contenu",
+        defaultValue: {}, // ← VIDE - Admin configure
+        comment: "Types de membres 100% configurables par l'admin",
       },
 
       cotisationSettings: {
         type: DataTypes.JSON,
         allowNull: false,
         defaultValue: {
-          dueDay: 5, // 5 de chaque mois
+          dueDay: 5,
           gracePeriodDays: 5,
           lateFeesEnabled: false,
           lateFeesAmount: 0,
@@ -289,12 +274,6 @@ module.exports = (sequelize, DataTypes) => {
           isUrl: true,
         },
       },
-      permissionsMatrix: {
-        type: DataTypes.JSON,
-        allowNull: true,
-        defaultValue: {},
-        comment: "Matrice des permissions configurables par association",
-      },
 
       // ⚙️ CONFIGURATION AVANCEE
       subscriptionPlan: {
@@ -319,11 +298,12 @@ module.exports = (sequelize, DataTypes) => {
           apiAccess: false,
         },
       },
+
       incomeTypes: {
         type: DataTypes.JSONB,
         allowNull: true,
         defaultValue: {},
-        field: "income_types", // ✅ Important : mapping snake_case
+        field: "income_types",
         comment: "Types d'entrées d'argent configurables",
       },
 
@@ -345,10 +325,10 @@ module.exports = (sequelize, DataTypes) => {
       tableName: "associations",
       underscored: true,
       timestamps: true,
-      paranoid: true, // Soft delete
+      paranoid: true,
 
       hooks: {
-        beforeCreate: (association) => {
+        beforeCreate: async (association) => {
           // Générer slug automatiquement
           if (!association.slug) {
             association.slug = association.name
@@ -357,6 +337,55 @@ module.exports = (sequelize, DataTypes) => {
               .replace(/\s+/g, "-")
               .substring(0, 50);
           }
+
+          // ✅ NOUVEAU : Initialiser rolesConfiguration avec permissions de base
+          if (!association.rolesConfiguration || 
+              !association.rolesConfiguration.availablePermissions ||
+              association.rolesConfiguration.availablePermissions.length === 0) {
+            
+            association.rolesConfiguration = {
+              version: '1.0',
+              roles: [], // Vide - admin créera les rôles
+              availablePermissions: [
+                // 📊 FINANCES
+                { id: 'view_finances', name: 'Consulter les finances', category: 'finances', description: 'Voir soldes, transactions, rapports' },
+                { id: 'validate_expenses', name: 'Valider les dépenses', category: 'finances', description: 'Approuver/rejeter demandes de dépenses' },
+                { id: 'export_financial_data', name: 'Exporter données financières', category: 'finances', description: 'Télécharger rapports CSV, Excel' },
+                { id: 'manage_transactions', name: 'Gérer les transactions', category: 'finances', description: 'Créer, modifier, annuler transactions' },
+                { id: 'manage_cotisations', name: 'Gérer les cotisations', category: 'finances', description: 'Créer, modifier, importer cotisations' },
+                { id: 'view_balance', name: 'Consulter les soldes', category: 'finances', description: 'Voir solde association et sections' },
+                
+                // 👥 MEMBRES
+                { id: 'manage_members', name: 'Gérer les membres', category: 'membres', description: 'Ajouter, modifier, supprimer membres' },
+                { id: 'view_members', name: 'Consulter les membres', category: 'membres', description: 'Voir liste et détails membres' },
+                { id: 'assign_roles', name: 'Attribuer des rôles', category: 'membres', description: 'Changer les rôles des membres' },
+                { id: 'manage_cotisations', name: 'Gérer les cotisations', category: 'membres', description: 'Modifier montants cotisations' },
+                
+                // 🏗️ SECTIONS
+                { id: 'manage_sections', name: 'Gérer les sections', category: 'sections', description: 'Créer, modifier, supprimer sections' },
+                { id: 'view_sections', name: 'Consulter les sections', category: 'sections', description: 'Voir détails des sections' },
+                
+                // 📢 COMMUNICATION
+                { id: 'send_notifications', name: 'Envoyer des notifications', category: 'communication', description: 'SMS, emails aux membres' },
+                { id: 'manage_announcements', name: 'Gérer les annonces', category: 'communication', description: 'Publier communications' },
+                
+                // 📄 DOCUMENTS
+                { id: 'view_documents', name: 'Consulter les documents', category: 'documents', description: 'Accéder aux documents' },
+                { id: 'upload_documents', name: 'Téléverser des documents', category: 'documents', description: 'Ajouter nouveaux documents' },
+                { id: 'manage_documents', name: 'Gérer les documents', category: 'documents', description: 'Modifier, supprimer documents' },
+                
+                // 📅 ÉVÉNEMENTS
+                { id: 'manage_events', name: 'Gérer les événements', category: 'evenements', description: 'Créer, modifier événements' },
+                { id: 'view_events', name: 'Consulter les événements', category: 'evenements', description: 'Voir calendrier événements' },
+                
+                // ⚙️ ADMINISTRATION
+                { id: 'modify_settings', name: 'Modifier les paramètres', category: 'administration', description: 'Changer configuration association' },
+                { id: 'manage_roles', name: 'Gérer les rôles', category: 'administration', description: 'Créer, modifier, supprimer rôles' },
+                { id: 'export_data', name: 'Exporter toutes les données', category: 'administration', description: 'Export complet sauvegarde' },
+                { id: 'view_audit_logs', name: 'Consulter les logs', category: 'administration', description: 'Voir historique actions' }
+              ]
+            };
+          }
         },
 
         afterCreate: (association) => {
@@ -364,7 +393,6 @@ module.exports = (sequelize, DataTypes) => {
         },
 
         beforeUpdate: (association) => {
-          // Mettre à jour lastActivityAt
           association.lastActivityAt = new Date();
         },
       },

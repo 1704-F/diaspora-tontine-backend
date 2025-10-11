@@ -1,7 +1,11 @@
-//src/modules/association/routes/associationRoutes.js
+//src/modules/associations/routes/associationRoutes.js
 const express = require('express');
 const multer = require('multer');
-const { authenticate, requireAssociationPermission } = require('../../../core/auth/middleware/auth');
+
+// ✅ IMPORTS MODIFIÉS - Nouveau système RBAC
+const { authenticate } = require('../../../core/auth/middleware/auth'); // ← GARDER authenticate
+const { checkAssociationMember, checkPermission } = require('../../../core/middleware/checkPermission'); // ← NOUVEAU
+
 const { 
   validateCreateAssociation,
   validateUpdateAssociation,
@@ -9,18 +13,16 @@ const {
   validateId,
   validateAssociationId
 } = require('../../../core/middleware/validation');
+
 const { associationController, sectionController, memberController } = require('../controllers');
-
-
 
 // Configuration multer pour upload de fichiers
 const upload = multer({
-  dest: 'uploads/documents/', // Dossier temporaire
+  dest: 'uploads/documents/',
   limits: {
     fileSize: 10 * 1024 * 1024, // 10MB max
   },
   fileFilter: (req, file, cb) => {
-    // Types de fichiers autorisés
     const allowedTypes = [
       'application/pdf',
       'image/jpeg', 
@@ -56,7 +58,7 @@ router.get('/',
 
 // Rechercher associations publiques
 router.get('/search',
-  validateListAssociations, // Pas d'auth requise pour recherche publique
+  validateListAssociations, // Pas d'auth requise
   associationController.searchPublicAssociations
 );
 
@@ -68,179 +70,212 @@ router.get('/:id',
 );
 
 // Modifier association
+// ✅ MIGRÉ: president → modify_settings
 router.put('/:id',
   authenticate,
   validateId,
   validateUpdateAssociation,
-  requireAssociationPermission('id', 'president'), // Président uniquement
+  checkAssociationMember,
+  checkPermission('modify_settings'),
   associationController.updateAssociation
 );
 
 // Supprimer association (soft delete)
+// ✅ MIGRÉ: president → modify_settings
 router.delete('/:id',
   authenticate,
   validateId,
-  requireAssociationPermission('id', 'president'), // Président uniquement
+  checkAssociationMember,
+  checkPermission('modify_settings'),
   associationController.deleteAssociation
 );
 
 // Mettre à jour configuration (types membres, bureau, permissions)
+// ✅ MIGRÉ: admin/bureau → manage_roles
 router.put('/:id/configuration',
   authenticate,
   validateId,
-  requireAssociationPermission('id', ['admin_association', 'president', 'secretaire', 'tresorier']), // ✅ Correct
+  checkAssociationMember,
+  checkPermission('manage_roles'),
   associationController.updateConfiguration
 );
 
 // Statistiques association
+// ✅ MIGRÉ: member → checkAssociationMember seulement
 router.get('/:id/stats',
   authenticate,
   validateId,
-  requireAssociationPermission('id', 'member'), // Tous les membres
+  checkAssociationMember, // Tous les membres peuvent voir
   associationController.getAssociationStats
 );
 
 // 🏗️ ROUTES SECTIONS
 
 // Créer section
+// ✅ MIGRÉ: central_board → manage_sections
 router.post('/:associationId/sections',
   authenticate,
   validateAssociationId,
-  requireAssociationPermission('associationId', 'central_board'),
+  checkAssociationMember,
+  checkPermission('manage_sections'),
   sectionController.createSection
 );
 
 // Lister sections
+// ✅ MIGRÉ: member → checkAssociationMember seulement
 router.get('/:associationId/sections',
   authenticate,
   validateAssociationId,
-  requireAssociationPermission('associationId', 'member'),
+  checkAssociationMember,
   sectionController.listSections
 );
 
 // Détails d'une section
+// ✅ MIGRÉ: member → checkAssociationMember seulement
 router.get('/:associationId/sections/:sectionId',
   authenticate,
   validateAssociationId,
-  requireAssociationPermission('associationId', 'member'),
+  checkAssociationMember,
   sectionController.getSectionDetails
 );
 
-
-
 // Modifier section
+// ✅ MIGRÉ: responsable_section → manage_sections
 router.put('/:associationId/sections/:sectionId',
   authenticate,
   validateAssociationId,
-  requireAssociationPermission('associationId', 'responsable_section'),
+  checkAssociationMember,
+  checkPermission('manage_sections'),
   sectionController.updateSection
 );
 
 // Mettre à jour bureau section
+// ✅ MIGRÉ: admin/central_board → manage_sections
 router.put('/:associationId/sections/:sectionId/bureau',
   authenticate,
   validateAssociationId,
-  requireAssociationPermission('associationId', ['admin_association', 'central_board']), // ← CORRECTION
+  checkAssociationMember,
+  checkPermission('manage_sections'),
   sectionController.updateBureauSection
 );
 
 // Statistiques section
+// ✅ MIGRÉ: member → checkAssociationMember seulement
 router.get('/:associationId/sections/:sectionId/stats',
   authenticate,
   validateAssociationId,
-  requireAssociationPermission('associationId', 'member'),
+  checkAssociationMember,
   sectionController.getSectionStats
 );
 
 // Supprimer section
+// ✅ MIGRÉ: president → manage_sections
 router.delete('/:associationId/sections/:sectionId',
   authenticate,
   validateAssociationId,
-  requireAssociationPermission('associationId', 'president'),
+  checkAssociationMember,
+  checkPermission('manage_sections'),
   sectionController.deleteSection
 );
 
-
 // Rapport comparatif sections
+// ✅ MIGRÉ: central_board → view_sections
 router.get('/:associationId/sections-comparison',
   authenticate,
   validateAssociationId,
-  requireAssociationPermission('associationId', 'central_board'),
+  checkAssociationMember,
+  checkPermission('view_sections'),
   sectionController.getSectionsComparison
 );
 
 // Transférer membre entre sections
+// ✅ MIGRÉ: central_board → manage_members
 router.post('/:associationId/sections/:sectionId/transfer-member',
   authenticate,
   validateAssociationId,
-  requireAssociationPermission('associationId', 'central_board'),
+  checkAssociationMember,
+  checkPermission('manage_members'),
   sectionController.transferMember
 );
 
 // 👥 ROUTES MEMBRES
 
 // Ajouter membre
+// ✅ MIGRÉ: admin_association → manage_members
 router.post('/:associationId/members',
   authenticate,
   validateAssociationId,
-  requireAssociationPermission('associationId', 'admin_association'),
+  checkAssociationMember,
+  checkPermission('manage_members'),
   memberController.addMember
 );
 
 // Lister membres
+// ✅ MIGRÉ: member → view_members
 router.get('/:associationId/members',
   authenticate,
   validateAssociationId,
-  requireAssociationPermission('associationId', 'member'),
+  checkAssociationMember,
+  checkPermission('view_members'),
   memberController.listMembers
 );
 
-// 2️⃣ MEMBRES D'UNE SECTION
+// Membres d'une section
+// ✅ MIGRÉ: member → view_members
 router.get('/:associationId/sections/:sectionId/members',
   authenticate,
   validateAssociationId,
-  requireAssociationPermission('associationId', 'member'),
+  checkAssociationMember,
+  checkPermission('view_members'),
   memberController.getSectionMembers
 );
 
-
 // Dashboard membre personnel
+// ✅ MIGRÉ: member → checkAssociationMember seulement (son propre dashboard)
 router.get('/:associationId/my-dashboard',
   authenticate,
   validateAssociationId,
-  requireAssociationPermission('associationId', 'member'),
+  checkAssociationMember,
   memberController.getMemberDashboard
 );
 
 // Obtenir détails d'un membre
+// ✅ MIGRÉ: member → view_members
 router.get('/:associationId/members/:memberId',
   authenticate,
   validateAssociationId,
-  requireAssociationPermission('associationId', 'member'),
+  checkAssociationMember,
+  checkPermission('view_members'),
   memberController.getMember
 );
 
 // Modifier membre
+// ✅ MIGRÉ: admin_association → manage_members
 router.put('/:associationId/members/:memberId',
   authenticate,
   validateAssociationId,
-  requireAssociationPermission('associationId', 'admin_association'),
+  checkAssociationMember,
+  checkPermission('manage_members'),
   memberController.updateMember
 );
 
 // Modifier statut membre
+// ✅ MIGRÉ: central_board → manage_members
 router.put('/:associationId/members/:memberId/status',
   authenticate,
   validateAssociationId,
-  requireAssociationPermission('associationId', 'central_board'),
+  checkAssociationMember,
+  checkPermission('manage_members'),
   memberController.updateMemberStatus
 );
 
 // Historique cotisations membre
+// ✅ MIGRÉ: member → view_members (peut voir ses cotisations ou autres si permissions)
 router.get('/:associationId/members/:memberId/cotisations',
   authenticate,
   validateAssociationId,
-  requireAssociationPermission('associationId', 'member'),
+  checkAssociationMember,
+  checkPermission('view_members'),
   memberController.getMemberCotisations
 );
 
@@ -248,7 +283,7 @@ router.get('/:associationId/members/:memberId/cotisations',
 router.put('/:associationId/members/:memberId/auto-payment',
   authenticate,
   validateAssociationId,
-  memberController.setupAutoPayment // Vérification permissions interne
+  memberController.setupAutoPayment // Vérification interne
 );
 
 // 💰 ROUTES COTISATIONS
@@ -260,81 +295,105 @@ router.post('/cotisations',
 );
 
 // Rapport cotisations association
+// ✅ MIGRÉ: tresorier → view_finances
 router.get('/:associationId/cotisations-report',
   authenticate,
   validateAssociationId,
-  requireAssociationPermission('associationId', 'tresorier'),
+  checkAssociationMember,
+  checkPermission('view_finances'),
   memberController.getCotisationsReport
 );
 
 // Import historique cotisations
+// ✅ MIGRÉ: central_board → manage_cotisations
 router.post('/:associationId/import-cotisations',
   authenticate,
   validateAssociationId,
-  requireAssociationPermission('associationId', 'central_board'),
+  checkAssociationMember,
+  checkPermission('manage_cotisations'),
   memberController.importCotisationsHistory
 );
 
 // Cotisations en retard
+// ✅ MIGRÉ: tresorier → view_finances
 router.get('/:associationId/overdue-cotisations',
   authenticate,
   validateAssociationId,
-  requireAssociationPermission('associationId', 'tresorier'),
+  checkAssociationMember,
+  checkPermission('view_finances'),
   memberController.getOverdueCotisations
 );
 
+// Dashboard cotisations
+// ✅ MIGRÉ: admin/bureau → view_finances
+router.get('/:associationId/cotisations-dashboard',
+  authenticate,
+  validateAssociationId,
+  checkAssociationMember,
+  checkPermission('view_finances'),
+  memberController.getCotisationsDashboard
+);
+
+// Ajouter cotisation manuelle
+// ✅ MIGRÉ: admin/bureau → manage_cotisations
+router.post('/:associationId/cotisations-manual',
+  authenticate,
+  validateAssociationId,
+  checkAssociationMember,
+  checkPermission('manage_cotisations'),
+  memberController.addManualCotisation
+);
+
+// 📄 ROUTES DOCUMENTS
+
 // Upload document KYB
+// ✅ MIGRÉ: admin → upload_documents
 router.post('/:id/documents',
   authenticate,
-  upload.single('document'), // Middleware multer
-  requireAssociationPermission('id', 'admin'),
+  upload.single('document'),
+  checkAssociationMember,
+  checkPermission('upload_documents'),
   associationController.uploadDocument
 );
 
 // Lister documents association
+// ✅ MIGRÉ: member → view_documents
 router.get('/:id/documents',
   authenticate,
-  requireAssociationPermission('id', 'member'),
+  checkAssociationMember,
+  checkPermission('view_documents'),
   associationController.getDocuments
 );
 
 // Télécharger document spécifique
+// ✅ MIGRÉ: member → view_documents
 router.get('/:id/documents/:documentId',
   authenticate,
-  requireAssociationPermission('id', 'member'),
+  checkAssociationMember,
+  checkPermission('view_documents'),
   associationController.downloadDocument
 );
 
 // Supprimer document spécifique
+// ✅ MIGRÉ: admin → manage_documents
 router.delete('/:id/documents/:documentId',
   authenticate,
-  requireAssociationPermission('id', 'admin'),
+  checkAssociationMember,
+  checkPermission('manage_documents'),
   associationController.deleteDocument
 );
 
-// Route spécifique pour setup association (sans validation stricte bureauCentral)
+// ⚙️ SETUP ASSOCIATION
+
+// Route spécifique pour setup association
+// ✅ MIGRÉ: admin → manage_roles
 router.put('/:id/setup',
   authenticate,
   validateId,
-  requireAssociationPermission('id', 'admin'),
+  checkAssociationMember,
+  checkPermission('manage_roles'),
   associationController.updateAssociationSetup
 );
-
-router.get('/:associationId/cotisations-dashboard',
-  authenticate,
-  validateAssociationId,
-  requireAssociationPermission('associationId', ['admin_association', 'president', 'tresorier']),
-  memberController.getCotisationsDashboard
-);
-
-router.post('/:associationId/cotisations-manual',
-  authenticate,
-  validateAssociationId,
-  requireAssociationPermission('associationId', ['admin_association', 'president', 'secretaire', 'tresorier']),
-  memberController.addManualCotisation
-);
-
-
 
 // 🚨 GESTION D'ERREURS
 router.use((error, req, res, next) => {

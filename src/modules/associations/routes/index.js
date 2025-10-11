@@ -8,6 +8,7 @@ const router = express.Router();
 const associationRoutes = require('./associationRoutes');
 const expenseRequestRoutes = require('./expenseRequests');
 const incomeEntriesRoutes = require('./incomeEntries');
+const rolesRoutes = require('./rolesRoutes');
 
 
 // 📋 ASSOCIATION CRUD
@@ -17,6 +18,9 @@ router.use('/', associationRoutes);
 router.use('/', expenseRequestRoutes);
 
 //Routes pour gestion des entrées d'argent personnalisées
+router.use('/', incomeEntriesRoutes);
+
+//Routes admin
 router.use('/', incomeEntriesRoutes);
 
 

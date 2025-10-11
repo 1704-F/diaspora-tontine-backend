@@ -1,4 +1,4 @@
-//src/modules/association/models/AssociationMember.js
+//src/modules/associations/models/AssociationMember.js
 'use strict';
 const { Model } = require('sequelize');
 
@@ -30,10 +30,72 @@ module.exports = (sequelize, DataTypes) => {
       });
     }
 
+    // ✅ NOUVEAU - Vérifier si a une permission spécifique
+    hasPermission(permission) {
+      // 1. Si admin, toutes permissions
+      if (this.isAdmin) {
+        return true;
+      }
+      
+      // 2. Vérifier customPermissions granted
+      if (this.customPermissions?.granted?.includes(permission)) {
+        return true;
+      }
+      
+      // 3. Vérifier customPermissions revoked
+      if (this.customPermissions?.revoked?.includes(permission)) {
+        return false;
+      }
+      
+      // 4. Vérifier dans les rôles attribués
+      if (!this.association?.rolesConfiguration) return false;
+      
+      const assignedRoles = this.assignedRoles || [];
+      const rolesConfig = this.association.rolesConfiguration.roles || [];
+      
+      for (const roleId of assignedRoles) {
+        const role = rolesConfig.find(r => r.id === roleId);
+        if (role?.permissions?.includes(permission)) {
+          return true;
+        }
+      }
+      
+      return false;
+    }
+
+    // ✅ NOUVEAU - Récupérer toutes les permissions effectives
+    getEffectivePermissions() {
+      // Admin a toutes permissions
+      if (this.isAdmin) {
+        return this.association?.rolesConfiguration?.availablePermissions?.map(p => p.id) || [];
+      }
+      
+      const permissions = new Set();
+      
+      // Permissions des rôles
+      const assignedRoles = this.assignedRoles || [];
+      const rolesConfig = this.association?.rolesConfiguration?.roles || [];
+      
+      for (const roleId of assignedRoles) {
+        const role = rolesConfig.find(r => r.id === roleId);
+        if (role?.permissions) {
+          role.permissions.forEach(p => permissions.add(p));
+        }
+      }
+      
+      // Ajouter customPermissions granted
+      (this.customPermissions?.granted || []).forEach(p => permissions.add(p));
+      
+      // Retirer customPermissions revoked
+      (this.customPermissions?.revoked || []).forEach(p => permissions.delete(p));
+      
+      return Array.from(permissions);
+    }
+
     // Calculer ancienneté totale (import + app)
     getTotalSeniority() {
-      const imported = this.ancienneteImported || 0; // En mois
-      const app = this.getAppSeniority(); // En mois
+      const imported = this.ancienneteImported || 0;
+      const app = this.getAppSeniority();
       return imported + app;
     }
 
@@ -43,7 +105,7 @@ module.exports = (sequelize, DataTypes) => {
       const now = new Date();
       const join = new Date(this.joinDate);
       const diffTime = Math.abs(now - join);
-      return Math.floor(diffTime / (1000 * 60 * 60 * 24 * 30)); // Mois
+      return Math.floor(diffTime / (1000 * 60 * 60 * 24 * 30));
     }
 
     // Vérifier si cotisation à jour ce mois
@@ -151,12 +213,36 @@ module.exports = (sequelize, DataTypes) => {
     
     sectionId: {
       type: DataTypes.INTEGER,
-      allowNull: true, // Null pour associations simples
+      allowNull: true,
       references: {
         model: 'sections',
         key: 'id'
       },
       comment: 'Section géographique (optionnel)'
+    },
+    
+    // 🔐 ADMIN ASSOCIATION (créateur)
+    isAdmin: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      comment: 'Admin de l\'association (créateur qui peut gérer rôles et paramètres)'
+    },
+    
+    // 🎯 SYSTÈME RBAC - Rôles attribués
+    assignedRoles: {
+      type: DataTypes.JSONB,
+      allowNull: false,
+      defaultValue: [],
+      comment: 'IDs des rôles attribués (ex: ["president_role", "tresorier_role"])'
+    },
+    
+    // 🔐 PERMISSIONS PERSONNALISÉES (override)
+    customPermissions: {
+      type: DataTypes.JSONB,
+      allowNull: false,
+      defaultValue: { granted: [], revoked: [] },
+      comment: 'Permissions ajoutées/retirées en plus des rôles: {granted: [...], revoked: [...]}'
     },
     
     // 🏷️ TYPE & STATUT MEMBRE (CONFIGURABLE)
@@ -206,19 +292,6 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: false,
       defaultValue: 0,
       comment: 'Ancienneté avant app (mois) - import historique'
-    },
-    
-    // 🎯 RÔLES & PERMISSIONS
-    roles: {
-      type: DataTypes.JSON,
-      allowNull: true,
-      comment: 'Rôles dans association/section (configurable JSON)'
-    },
-    
-    permissions: {
-      type: DataTypes.JSON,
-      allowNull: true,
-      comment: 'Permissions spécifiques (transparence configurable)'
     },
     
     // 💰 CONFIGURATION COTISATIONS
@@ -325,6 +398,27 @@ module.exports = (sequelize, DataTypes) => {
     underscored: true,
     timestamps: true,
     
+    hooks: {
+      afterCreate: async (member) => {
+        // ✅ NOUVEAU : Si premier membre, le rendre admin automatiquement
+        const { AssociationMember } = sequelize.models;
+        const membersCount = await AssociationMember.count({
+          where: { associationId: member.associationId }
+        });
+        
+        if (membersCount === 1 && !member.isAdmin) {
+          await member.update({ 
+            isAdmin: true,
+            customPermissions: {
+              granted: ['manage_roles', 'manage_association_settings'],
+              revoked: []
+            }
+          });
+          console.log(`✅ Premier membre ${member.userId} défini comme admin de l'association ${member.associationId}`);
+        }
+      }
+    },
+    
     indexes: [
       {
         fields: ['user_id']
@@ -348,6 +442,9 @@ module.exports = (sequelize, DataTypes) => {
       },
       {
         fields: ['contribution_status']
+      },
+      {
+        fields: ['is_admin'] // ← Nouvel index
       }
     ]
   });

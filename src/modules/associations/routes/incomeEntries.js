@@ -6,11 +6,8 @@ const router = express.Router();
 const { body, param, query } = require('express-validator');
 const { authenticate: authMiddleware } = require('../../../core/auth/middleware/auth');
 const { handleValidationErrors } = require('../../../core/middleware/validation');
-const { 
-  checkAssociationMember, 
-  checkFinancialViewRights,
-  checkFinancialValidationRights 
-} = require('../../../core/middleware/permissions');
+const { checkAssociationMember, checkPermission } = require('../../../core/middleware/checkPermission');
+
 const incomeEntryController = require('../controllers/incomeEntryController');
 
 // 📋 VALIDATIONS
@@ -209,7 +206,7 @@ const validateRejectIncomeEntry = [
 router.post('/:associationId/income-entries',
   authMiddleware,
   checkAssociationMember,
-  checkFinancialValidationRights(),
+  checkPermission('validate_expenses'),
   validateCreateIncomeEntry,
   incomeEntryController.createIncomeEntry
 );
@@ -222,7 +219,7 @@ router.post('/:associationId/income-entries',
 router.get('/:associationId/income-entries',
   authMiddleware,
   checkAssociationMember,
-  checkFinancialViewRights(),
+  checkPermission('view_finances'),
   validateGetIncomeEntries,
   incomeEntryController.getIncomeEntries
 );
@@ -235,7 +232,7 @@ router.get('/:associationId/income-entries',
 router.get('/:associationId/income-entries/:entryId',
   authMiddleware,
   checkAssociationMember,
-  checkFinancialViewRights(),
+  checkPermission('view_finances'),
   [
     param('associationId').isInt({ min: 1 }),
     param('entryId').isInt({ min: 1 }),
@@ -252,7 +249,7 @@ router.get('/:associationId/income-entries/:entryId',
 router.put('/:associationId/income-entries/:entryId',
   authMiddleware,
   checkAssociationMember,
-  checkFinancialValidationRights(),
+  checkPermission('validate_expenses'),
   validateUpdateIncomeEntry,
   incomeEntryController.updateIncomeEntry
 );
@@ -265,7 +262,7 @@ router.put('/:associationId/income-entries/:entryId',
 router.delete('/:associationId/income-entries/:entryId',
   authMiddleware,
   checkAssociationMember,
-  checkFinancialValidationRights(),
+  checkPermission('validate_expenses'),
   [
     param('associationId').isInt({ min: 1 }),
     param('entryId').isInt({ min: 1 }),
@@ -284,7 +281,7 @@ router.delete('/:associationId/income-entries/:entryId',
 router.post('/:associationId/income-entries/:entryId/validate',
   authMiddleware,
   checkAssociationMember,
-  checkFinancialValidationRights(),
+  checkPermission('validate_expenses'),
   validateValidateIncomeEntry,
   incomeEntryController.validateIncomeEntry
 );
@@ -297,7 +294,7 @@ router.post('/:associationId/income-entries/:entryId/validate',
 router.post('/:associationId/income-entries/:entryId/reject',
   authMiddleware,
   checkAssociationMember,
-  checkFinancialValidationRights(),
+  checkPermission('validate_expenses'),
   validateRejectIncomeEntry,
   incomeEntryController.rejectIncomeEntry
 );
@@ -310,7 +307,7 @@ router.post('/:associationId/income-entries/:entryId/reject',
 router.post('/:associationId/income-entries/:entryId/resubmit',
   authMiddleware,
   checkAssociationMember,
-  checkFinancialValidationRights(),
+  checkPermission('validate_expenses'),
   [
     param('associationId').isInt({ min: 1 }),
     param('entryId').isInt({ min: 1 }),
@@ -330,7 +327,7 @@ router.post('/:associationId/income-entries/:entryId/resubmit',
 router.post('/:associationId/income-entries/:entryId/generate-receipt',
   authMiddleware,
   checkAssociationMember,
-  checkFinancialValidationRights(),
+  checkPermission('validate_expenses'),
   [
     param('associationId').isInt({ min: 1 }),
     param('entryId').isInt({ min: 1 }),
@@ -347,7 +344,7 @@ router.post('/:associationId/income-entries/:entryId/generate-receipt',
 router.post('/:associationId/income-entries/:entryId/send-thanks',
   authMiddleware,
   checkAssociationMember,
-  checkFinancialValidationRights(),
+  checkPermission('validate_expenses'),
   [
     param('associationId').isInt({ min: 1 }),
     param('entryId').isInt({ min: 1 }),
@@ -365,7 +362,7 @@ router.post('/:associationId/income-entries/:entryId/send-thanks',
 router.post('/:associationId/income-entries/:entryId/documents',
   authMiddleware,
   checkAssociationMember,
-  checkFinancialValidationRights(),
+  checkPermission('validate_expenses'),
   [
     param('associationId').isInt({ min: 1 }),
     param('entryId').isInt({ min: 1 }),
@@ -385,7 +382,7 @@ router.post('/:associationId/income-entries/:entryId/documents',
 router.get('/:associationId/income-entries/statistics',
   authMiddleware,
   checkAssociationMember,
-  checkFinancialViewRights(),
+  checkPermission('view_finances'),
   [
     param('associationId').isInt({ min: 1 }),
     query('period').optional().isIn(['month', 'quarter', 'year', 'all']),
@@ -403,7 +400,7 @@ router.get('/:associationId/income-entries/statistics',
 router.get('/:associationId/income-entries/export',
   authMiddleware,
   checkAssociationMember,
-  checkFinancialViewRights(),
+  checkPermission('view_finances'),
   [
     param('associationId').isInt({ min: 1 }),
     query('format').optional().isIn(['excel', 'csv', 'pdf']),
@@ -423,7 +420,7 @@ router.get('/:associationId/income-entries/export',
 router.get('/:associationId/income-entries/pending-validation',
   authMiddleware,
   checkAssociationMember,
-  checkFinancialValidationRights(),
+  checkPermission('validate_expenses'),
   [
     param('associationId').isInt({ min: 1 }),
     handleValidationErrors
@@ -441,7 +438,7 @@ router.get('/:associationId/income-entries/pending-validation',
 router.get('/:associationId/income-types',
   authMiddleware,
   checkAssociationMember,
-  checkFinancialViewRights(),
+  checkPermission('view_finances'),
   [
     param('associationId').isInt({ min: 1 }),
     handleValidationErrors
@@ -457,7 +454,7 @@ router.get('/:associationId/income-types',
 router.post('/:associationId/income-types',
   authMiddleware,
   checkAssociationMember,
-  checkFinancialValidationRights(),
+  checkPermission('validate_expenses'),
   [
     param('associationId').isInt({ min: 1 }),
     body('typeName').trim().isLength({ min: 2, max: 50 }),
