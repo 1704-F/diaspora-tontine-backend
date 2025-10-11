@@ -89,15 +89,15 @@ class ExpenseRequestController {
       }
 
       if (beneficiaryId) {
-  const beneficiary = await User.findByPk(parseInt(beneficiaryId));
-  if (!beneficiary) {
-    return res.status(400).json({
-      error: 'Bénéficiaire sélectionné introuvable',
-      code: 'BENEFICIARY_NOT_FOUND',
-      beneficiaryId: beneficiaryId
-    });
-  }
-}
+        const beneficiary = await User.findByPk(parseInt(beneficiaryId));
+        if (!beneficiary) {
+          return res.status(400).json({
+            error: "Bénéficiaire sélectionné introuvable",
+            code: "BENEFICIARY_NOT_FOUND",
+            beneficiaryId: beneficiaryId,
+          });
+        }
+      }
 
       // ✅ CRÉATION DEMANDE
       const expenseRequest = await ExpenseRequest.create({
@@ -123,23 +123,25 @@ class ExpenseRequestController {
       });
 
       // Dans createExpenseRequest, après validation beneficiaryId
-console.log('🔍 Debug membres disponibles:');
-const allMembers = await AssociationMember.findAll({
-  where: { associationId: parseInt(associationId), status: 'active' },
-  include: [{
-    model: User,
-    as: 'user',
-    attributes: ['id', 'firstName', 'lastName']
-  }]
-});
-console.log('Membres trouvés:', allMembers.map(m => ({ 
-  memberId: m.id, 
-  userId: m.user?.id, 
-  name: `${m.user?.firstName} ${m.user?.lastName}` 
-})));
-
- 
-
+      console.log("🔍 Debug membres disponibles:");
+      const allMembers = await AssociationMember.findAll({
+        where: { associationId: parseInt(associationId), status: "active" },
+        include: [
+          {
+            model: User,
+            as: "user",
+            attributes: ["id", "firstName", "lastName"],
+          },
+        ],
+      });
+      console.log(
+        "Membres trouvés:",
+        allMembers.map((m) => ({
+          memberId: m.id,
+          userId: m.user?.id,
+          name: `${m.user?.firstName} ${m.user?.lastName}`,
+        }))
+      );
 
       // 📊 CHARGER RELATIONS POUR RÉPONSE
       const createdRequest = await ExpenseRequest.findByPk(expenseRequest.id, {
@@ -161,8 +163,6 @@ console.log('Membres trouvés:', allMembers.map(m => ({
           },
         ],
       });
-
-  
 
       res.status(201).json({
         message: "Demande de dépense créée avec succès",
@@ -204,6 +204,18 @@ console.log('Membres trouvés:', allMembers.map(m => ({
         sortBy = "created_at",
         sortOrder = "DESC",
       } = req.query;
+
+      // ✅ AJOUTER CE MAPPING
+    const columnMapping = {
+  'createdAt': 'created_at',
+  'created_at': 'created_at',
+  'amountRequested': 'amount_requested', // ✅ Si la colonne DB est en snake_case
+  'urgencyLevel': 'urgency_level',       // ✅ Si la colonne DB est en snake_case
+  'status': 'status',
+  'approvedAt': 'approved_at'
+};
+
+    const sortColumn = columnMapping[sortBy] || 'created_at';
 
       // 🔐 CONTRÔLE ACCÈS SELON PERMISSIONS
       const association = await Association.findByPk(associationId);
@@ -280,7 +292,7 @@ console.log('Membres trouvés:', allMembers.map(m => ({
             attributes: ["id", "name"],
           },
         ],
-        order: [[sortBy, sortOrder.toUpperCase()]],
+        order: [[sortColumn, sortOrder.toUpperCase()]],
         limit: parseInt(limit),
         offset,
       });
@@ -294,14 +306,12 @@ console.log('Membres trouvés:', allMembers.map(m => ({
           (request.requesterId === userId || canViewAll),
       }));
 
-      console.log('🔍 Debug getExpenseRequests:');
-console.log('   associationId:', associationId);
-console.log('   userId:', userId);
-console.log('   userRoles:', userRoles);
-console.log('   canViewAll:', canViewAll);
-console.log('   whereClause:', whereClause);
-
-
+      console.log("🔍 Debug getExpenseRequests:");
+      console.log("   associationId:", associationId);
+      console.log("   userId:", userId);
+      console.log("   userRoles:", userRoles);
+      console.log("   canViewAll:", canViewAll);
+      console.log("   whereClause:", whereClause);
 
       res.json({
         expenseRequests: enrichedRows,
@@ -370,10 +380,10 @@ console.log('   whereClause:', whereClause);
             attributes: ["id", "amount", "status", "created_at"],
           },
           // {
-//   model: Document,
-//   as: 'relatedDocuments',
-//   attributes: ['id', 'type', 'name', 'url', 'uploadedAt']
-// },
+          //   model: Document,
+          //   as: 'relatedDocuments',
+          //   attributes: ['id', 'type', 'name', 'url', 'uploadedAt']
+          // },
         ],
       });
 
@@ -630,34 +640,186 @@ console.log('   whereClause:', whereClause);
   }
 
   /**
-   * ⚖️ Valider/rejeter/demander infos pour une demande
-   */
-  async validateExpenseRequest(req, res) {
-    try {
-      // TODO: Implémenter logique validation
-      res.status(501).json({
-        error: "Fonctionnalité en cours de développement",
-        code: "NOT_IMPLEMENTED",
+ * ✅ Approuver une demande de dépense
+ * POST /api/v1/associations/:associationId/expense-requests/:requestId/approve
+ */
+async approveExpenseRequest(req, res) {
+  try {
+    const { associationId, requestId } = req.params;
+    const { comment, amountApproved, conditions } = req.body;
+
+    const expenseRequest = await ExpenseRequest.findOne({
+      where: {
+        id: parseInt(requestId),
+        associationId: parseInt(associationId),
+        status: ['pending', 'under_review']
+      }
+    });
+
+    if (!expenseRequest) {
+      return res.status(404).json({
+        error: 'Demande non trouvée ou déjà traitée',
+        code: 'EXPENSE_REQUEST_NOT_FOUND'
       });
-    } catch (error) {
-      console.error("Erreur validation demande:", error);
-      res.status(500).json({ error: "Erreur serveur" });
     }
+
+    // Vérifier permissions
+    const membership = req.membership;
+    const userRoles = membership?.roles || [];
+    const canApprove = 
+      userRoles.includes('admin_association') ||
+      userRoles.includes('president') ||
+      userRoles.includes('tresorier') ||
+      userRoles.includes('secretaire') ||
+      req.user.role === 'super_admin';
+
+    if (!canApprove) {
+      return res.status(403).json({
+        error: 'Permissions insuffisantes',
+        code: 'INSUFFICIENT_PERMISSIONS'
+      });
+    }
+
+    // Vérifier si déjà validé
+    const existingValidation = expenseRequest.validationHistory?.find(
+      v => v.userId === req.user.id
+    );
+
+    if (existingValidation) {
+      return res.status(400).json({
+        error: 'Vous avez déjà validé cette demande',
+        code: 'ALREADY_VALIDATED'
+      });
+    }
+
+    // Ajouter validation
+    const validationHistory = expenseRequest.validationHistory || [];
+    validationHistory.push({
+      userId: req.user.id,
+      role: userRoles[0] || 'member',
+      decision: 'approved',
+      comment: comment || '',
+      timestamp: new Date().toISOString(),
+      user: {
+        firstName: req.user.firstName,
+        lastName: req.user.lastName
+      }
+    });
+
+    // Déterminer statut
+    const requiredValidators = expenseRequest.requiredValidators || ['president', 'tresorier'];
+    const approvedCount = validationHistory.filter(v => v.decision === 'approved').length;
+    
+    let newStatus = 'under_review';
+    if (approvedCount >= requiredValidators.length) {
+      newStatus = 'approved';
+    }
+
+    await expenseRequest.update({
+      status: newStatus,
+      validationHistory,
+      amountApproved: amountApproved || expenseRequest.amountRequested,
+      approvalConditions: conditions || null,
+      approvedAt: newStatus === 'approved' ? new Date() : null
+    });
+
+    res.json({
+      success: true,
+      message: newStatus === 'approved' ? 'Demande approuvée' : 'Validation enregistrée',
+      data: {
+        expenseRequest,
+        validationProgress: {
+          completed: approvedCount,
+          total: requiredValidators.length,
+          percentage: Math.round((approvedCount / requiredValidators.length) * 100)
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Erreur approbation:', error);
+    res.status(500).json({
+      error: 'Erreur lors de l\'approbation',
+      code: 'APPROVAL_ERROR'
+    });
   }
+}
 
   /**
-   * 📋 Demandes en attente de validation
+   * ⏳ Demandes en attente de validation
+   * GET /api/v1/associations/:associationId/expense-requests/pending-validations
    */
   async getPendingValidations(req, res) {
     try {
-      // TODO: Implémenter logique demandes en attente
-      res.status(501).json({
-        error: "Fonctionnalité en cours de développement",
-        code: "NOT_IMPLEMENTED",
+      const { associationId } = req.params;
+
+      const pendingRequests = await ExpenseRequest.findAll({
+        where: {
+          associationId: parseInt(associationId),
+          status: ["pending", "under_review"],
+        },
+        include: [
+          {
+            model: User,
+            as: "requester",
+            attributes: ["id", "firstName", "lastName"],
+          },
+          {
+            model: User,
+            as: "beneficiary",
+            attributes: ["id", "firstName", "lastName"],
+          },
+          {
+            model: Section,
+            as: "section",
+            attributes: ["id", "name"],
+          },
+        ],
+        order: [
+          ["urgencyLevel", "DESC"],
+          ["created_at", "ASC"],
+        ],
+      });
+
+      // Filtrer où user n'a pas validé
+      const userPendingRequests = pendingRequests.filter((request) => {
+        const userValidation = request.validationHistory?.find(
+          (v) => v.userId === req.user.id
+        );
+        return !userValidation;
+      });
+
+      const stats = {
+        total: userPendingRequests.length,
+        totalAmount: userPendingRequests.reduce(
+          (sum, req) => sum + parseFloat(req.amountRequested),
+          0
+        ),
+        byUrgency: {
+          critical: userPendingRequests.filter(
+            (r) => r.urgencyLevel === "critical"
+          ).length,
+          high: userPendingRequests.filter((r) => r.urgencyLevel === "high")
+            .length,
+          normal: userPendingRequests.filter((r) => r.urgencyLevel === "normal")
+            .length,
+          low: userPendingRequests.filter((r) => r.urgencyLevel === "low")
+            .length,
+        },
+      };
+
+      res.json({
+        success: true,
+        data: {
+          pendingRequests: userPendingRequests,
+          statistics: stats,
+        },
       });
     } catch (error) {
-      console.error("Erreur demandes en attente:", error);
-      res.status(500).json({ error: "Erreur serveur" });
+      console.error("Erreur validations en attente:", error);
+      res.status(500).json({
+        error: "Erreur récupération",
+        code: "PENDING_VALIDATIONS_ERROR",
+      });
     }
   }
 
@@ -677,35 +839,183 @@ console.log('   whereClause:', whereClause);
     }
   }
 
-  /**
-   * 💳 Confirmer paiement manuel
-   */
   async processPayment(req, res) {
-    try {
-      // TODO: Implémenter confirmation paiement
-      res.status(501).json({
-        error: "Fonctionnalité en cours de développement",
-        code: "NOT_IMPLEMENTED",
+  try {
+    const { associationId, requestId } = req.params;
+    const {
+      paymentMode = 'manual',
+      paymentMethod,
+      paymentDate,
+      manualPaymentReference,
+      manualPaymentDetails,
+      notes
+    } = req.body;
+
+    // Vérifier que la demande existe et est approuvée
+    const expenseRequest = await ExpenseRequest.findOne({
+      where: {
+        id: parseInt(requestId),
+        associationId: parseInt(associationId),
+        status: 'approved'
+      }
+    });
+
+    if (!expenseRequest) {
+      return res.status(404).json({
+        error: 'Demande non trouvée ou non approuvée',
+        code: 'EXPENSE_REQUEST_NOT_FOUND'
       });
-    } catch (error) {
-      console.error("Erreur paiement:", error);
-      res.status(500).json({ error: "Erreur serveur" });
     }
+
+    // Vérifier permissions (trésorier ou admin_association)
+    const membership = req.membership;
+    const userRoles = membership?.roles || [];
+    const canPay = 
+      userRoles.includes('admin_association') ||
+      userRoles.includes('tresorier') ||
+      req.user.role === 'super_admin';
+
+    if (!canPay) {
+      return res.status(403).json({
+        error: 'Seul le trésorier ou admin peut confirmer les paiements',
+        code: 'INSUFFICIENT_PERMISSIONS'
+      });
+    }
+
+    // Créer la transaction
+    const transaction = await Transaction.create({
+      associationId: parseInt(associationId),
+      userId: expenseRequest.beneficiaryId || null,
+      type: expenseRequest.isLoan ? 'pret' : 'aide',
+      amount: parseFloat(expenseRequest.amountApproved || expenseRequest.amountRequested),
+      currency: expenseRequest.currency,
+      status: 'completed',
+      paymentMode,
+      paymentMethod,
+      manualPaymentReference,
+      manualPaymentDetails,
+      metadata: {
+        expenseRequestId: expenseRequest.id,
+        processedBy: req.user.id,
+        processedAt: new Date().toISOString(),
+        notes
+      }
+    });
+
+    // Mettre à jour le statut de la demande
+    await expenseRequest.update({
+      status: 'paid',
+      transactionId: transaction.id,
+      paidAt: new Date(paymentDate || new Date()),
+      paymentValidator: req.user.id
+    });
+
+    res.json({
+      success: true,
+      message: 'Paiement confirmé avec succès',
+      data: {
+        expenseRequest: {
+          id: expenseRequest.id,
+          status: 'paid',
+          paidAt: expenseRequest.paidAt
+        },
+        transaction: {
+          id: transaction.id,
+          amount: transaction.amount,
+          reference: manualPaymentReference
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Erreur confirmation paiement:', error);
+    res.status(500).json({
+      error: 'Erreur lors de la confirmation du paiement',
+      code: 'PAYMENT_PROCESS_ERROR',
+      details: error.message
+    });
   }
+}
 
   /**
    * 🔄 Lister remboursements prêt
    */
   async getRepayments(req, res) {
     try {
-      // TODO: Implémenter liste remboursements
-      res.status(501).json({
-        error: "Fonctionnalité en cours de développement",
-        code: "NOT_IMPLEMENTED",
+      const { associationId, requestId } = req.params;
+
+      // Vérifier que c'est bien un prêt
+      const expenseRequest = await ExpenseRequest.findOne({
+        where: {
+          id: parseInt(requestId),
+          associationId: parseInt(associationId),
+          isLoan: true,
+        },
+      });
+
+      if (!expenseRequest) {
+        return res.status(404).json({
+          error: "Prêt non trouvé",
+          code: "LOAN_NOT_FOUND",
+        });
+      }
+
+      // Récupérer les remboursements
+      const repayments = await LoanRepayment.findAll({
+        where: { expenseRequestId: parseInt(requestId) },
+        include: [
+          {
+            model: User,
+            as: "validator",
+            attributes: ["id", "firstName", "lastName"],
+          },
+        ],
+        order: [["paymentDate", "DESC"]],
+      });
+
+      // Calculer totaux
+      const totalRepaid = repayments
+        .filter((r) => r.status === "validated")
+        .reduce((sum, r) => sum + parseFloat(r.amount), 0);
+
+      const totalPending = repayments
+        .filter((r) => r.status === "pending")
+        .reduce((sum, r) => sum + parseFloat(r.amount), 0);
+
+      res.json({
+        success: true,
+        data: {
+          repayments: repayments.map((r) => ({
+            id: r.id,
+            amount: parseFloat(r.amount),
+            principalAmount: parseFloat(r.principalAmount),
+            interestAmount: parseFloat(r.interestAmount),
+            penaltyAmount: parseFloat(r.penaltyAmount),
+            paymentDate: r.paymentDate,
+            dueDate: r.dueDate,
+            paymentMethod: r.paymentMethod,
+            manualReference: r.manualReference,
+            status: r.status,
+            daysLate: r.daysLate,
+            notes: r.notes,
+            installmentNumber: r.installmentNumber,
+            validator: r.validator,
+            createdAt: r.createdAt,
+          })),
+          summary: {
+            totalRepaid,
+            totalPending,
+            loanAmount: parseFloat(expenseRequest.amountRequested),
+            outstanding:
+              parseFloat(expenseRequest.amountRequested) - totalRepaid,
+          },
+        },
       });
     } catch (error) {
-      console.error("Erreur remboursements:", error);
-      res.status(500).json({ error: "Erreur serveur" });
+      console.error("Erreur récupération remboursements:", error);
+      res.status(500).json({
+        error: "Erreur lors de la récupération des remboursements",
+        code: "REPAYMENTS_FETCH_ERROR",
+      });
     }
   }
 
@@ -714,14 +1024,121 @@ console.log('   whereClause:', whereClause);
    */
   async recordRepayment(req, res) {
     try {
-      // TODO: Implémenter enregistrement remboursement
-      res.status(501).json({
-        error: "Fonctionnalité en cours de développement",
-        code: "NOT_IMPLEMENTED",
+      const { associationId, requestId } = req.params;
+      const {
+        amount,
+        paymentDate,
+        paymentMethod,
+        paymentMode = "manual",
+        manualReference,
+        notes,
+      } = req.body;
+
+      // Vérifier le prêt
+      const loan = await ExpenseRequest.findOne({
+        where: {
+          id: parseInt(requestId),
+          associationId: parseInt(associationId),
+          isLoan: true,
+          status: ["approved", "paid"], // Seulement les prêts actifs
+        },
+      });
+
+      if (!loan) {
+        return res.status(404).json({
+          error: "Prêt non trouvé ou non actif",
+          code: "LOAN_NOT_FOUND",
+        });
+      }
+
+      // Calculer total déjà remboursé
+      const existingRepayments = await LoanRepayment.findAll({
+        where: {
+          expenseRequestId: parseInt(requestId),
+          status: "validated",
+        },
+      });
+
+      const totalRepaid = existingRepayments.reduce(
+        (sum, r) => sum + parseFloat(r.amount),
+        0
+      );
+
+      const loanAmount = parseFloat(loan.amountRequested);
+      const outstanding = loanAmount - totalRepaid;
+
+      // Vérifier que le montant ne dépasse pas le restant dû
+      if (parseFloat(amount) > outstanding) {
+        return res.status(400).json({
+          error: "Le montant dépasse le restant dû",
+          code: "AMOUNT_EXCEEDS_OUTSTANDING",
+          details: {
+            outstanding,
+            requested: parseFloat(amount),
+          },
+        });
+      }
+
+      // Créer le remboursement
+      const repayment = await LoanRepayment.create({
+        expenseRequestId: parseInt(requestId),
+        amount: parseFloat(amount),
+        principalAmount: parseFloat(amount), // Pour l'instant, pas d'intérêts
+        interestAmount: 0,
+        penaltyAmount: 0,
+        currency: loan.currency,
+        paymentDate: new Date(paymentDate),
+        paymentMode,
+        paymentMethod,
+        manualReference: manualReference || `REMB-${requestId}-${Date.now()}`,
+        manualDetails: {
+          recordedBy: req.user.id,
+          recordedAt: new Date(),
+        },
+        notes,
+        status: "pending", // Nécessite validation
+        installmentNumber: existingRepayments.length + 1,
+      });
+
+      // Mettre à jour le statut du prêt si totalement remboursé
+      const newTotal = totalRepaid + parseFloat(amount);
+      if (newTotal >= loanAmount) {
+        await loan.update({
+          repaymentStatus: "completed",
+          status: "paid",
+        });
+      } else if (existingRepayments.length === 0) {
+        await loan.update({
+          repaymentStatus: "in_progress",
+        });
+      }
+
+      res.status(201).json({
+        success: true,
+        message: "Remboursement enregistré avec succès",
+        data: {
+          repayment: {
+            id: repayment.id,
+            amount: parseFloat(repayment.amount),
+            paymentDate: repayment.paymentDate,
+            status: repayment.status,
+            reference: repayment.manualReference,
+          },
+          loanStatus: {
+            totalRepaid: newTotal,
+            outstanding: loanAmount - newTotal,
+            repaymentStatus:
+              newTotal >= loanAmount ? "completed" : "in_progress",
+          },
+        },
       });
     } catch (error) {
       console.error("Erreur enregistrement remboursement:", error);
-      res.status(500).json({ error: "Erreur serveur" });
+      res.status(500).json({
+        error: "Erreur lors de l'enregistrement du remboursement",
+        code: "REPAYMENT_RECORD_ERROR",
+        details: error.message,
+      });
     }
   }
 
@@ -1303,9 +1720,152 @@ console.log('   whereClause:', whereClause);
     }
   }
 
+  /**
+   * ❌ Refuser une demande
+   * POST /api/v1/associations/:associationId/expense-requests/:requestId/reject
+   */
+  async rejectExpenseRequest(req, res) {
+    try {
+      const { associationId, requestId } = req.params;
+      const { rejectionReason } = req.body;
+
+      if (!rejectionReason || rejectionReason.trim().length < 10) {
+        return res.status(400).json({
+          error: "Motif de refus requis (minimum 10 caractères)",
+          code: "REJECTION_REASON_REQUIRED",
+        });
+      }
+
+      const expenseRequest = await ExpenseRequest.findOne({
+        where: {
+          id: parseInt(requestId),
+          associationId: parseInt(associationId),
+          status: ["pending", "under_review"],
+        },
+      });
+
+      if (!expenseRequest) {
+        return res.status(404).json({
+          error: "Demande non trouvée",
+          code: "EXPENSE_REQUEST_NOT_FOUND",
+        });
+      }
+
+      const membership = req.membership;
+      const userRoles = membership?.roles || [];
+      const canReject =
+        userRoles.includes("admin_association") ||
+        userRoles.includes("president") ||
+        userRoles.includes("tresorier") ||
+        userRoles.includes("secretaire") ||
+        req.user.role === "super_admin";
+
+      if (!canReject) {
+        return res.status(403).json({
+          error: "Permissions insuffisantes",
+          code: "INSUFFICIENT_PERMISSIONS",
+        });
+      }
+
+      const validationHistory = expenseRequest.validationHistory || [];
+      validationHistory.push({
+        userId: req.user.id,
+        role: userRoles[0] || "member",
+        decision: "rejected",
+        comment: rejectionReason.trim(),
+        timestamp: new Date().toISOString(),
+        user: {
+          firstName: req.user.firstName,
+          lastName: req.user.lastName,
+        },
+      });
+
+      await expenseRequest.update({
+        status: "rejected",
+        validationHistory,
+        rejectionReason: rejectionReason.trim(),
+        rejectedAt: new Date(),
+      });
+
+      res.json({
+        success: true,
+        message: "Demande rejetée",
+        data: { expenseRequest },
+      });
+    } catch (error) {
+      console.error("Erreur rejet:", error);
+      res.status(500).json({
+        error: "Erreur lors du rejet",
+        code: "REJECTION_ERROR",
+      });
+    }
+  }
+
+  /**
+   * 💬 Demander infos complémentaires
+   * POST /api/v1/associations/:associationId/expense-requests/:requestId/request-info
+   */
+  async requestAdditionalInfo(req, res) {
+    try {
+      const { associationId, requestId } = req.params;
+      const { requestedInfo } = req.body;
+
+      if (!requestedInfo || requestedInfo.trim().length < 10) {
+        return res.status(400).json({
+          error: "Précisez les informations demandées",
+          code: "INFO_REQUEST_REQUIRED",
+        });
+      }
+
+      const expenseRequest = await ExpenseRequest.findOne({
+        where: {
+          id: parseInt(requestId),
+          associationId: parseInt(associationId),
+          status: ["pending", "under_review"],
+        },
+      });
+
+      if (!expenseRequest) {
+        return res.status(404).json({
+          error: "Demande non trouvée",
+          code: "EXPENSE_REQUEST_NOT_FOUND",
+        });
+      }
+
+      const validationHistory = expenseRequest.validationHistory || [];
+      validationHistory.push({
+        userId: req.user.id,
+        role: req.membership?.roles?.[0] || "member",
+        decision: "info_needed",
+        comment: requestedInfo.trim(),
+        timestamp: new Date().toISOString(),
+        user: {
+          firstName: req.user.firstName,
+          lastName: req.user.lastName,
+        },
+      });
+
+      await expenseRequest.update({
+        status: "additional_info_needed",
+        validationHistory,
+        requestedAdditionalInfo: requestedInfo.trim(),
+      });
+
+      res.json({
+        success: true,
+        message: "Demande d'informations envoyée",
+        data: { expenseRequest },
+      });
+    } catch (error) {
+      console.error("Erreur demande infos:", error);
+      res.status(500).json({
+        error: "Erreur demande infos",
+        code: "INFO_REQUEST_ERROR",
+      });
+    }
+  }
 
 
-  
 }
 
 module.exports = new ExpenseRequestController();

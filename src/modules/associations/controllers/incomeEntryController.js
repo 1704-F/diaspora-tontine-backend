@@ -134,6 +134,16 @@ class IncomeEntryController {
         });
       }
 
+      const typeConfig = incomeTypes[incomeType];
+      if (typeConfig.maxAmount && parseFloat(amount) > typeConfig.maxAmount) {
+        return res.status(400).json({
+          error: `Montant maximum dépassé pour le type "${typeConfig.label}"`,
+          code: "AMOUNT_EXCEEDS_MAX",
+          maxAmount: typeConfig.maxAmount,
+          requestedAmount: parseFloat(amount),
+        });
+      }
+
       // Vérifier section si spécifiée
       if (sectionId) {
         const section = await Section.findOne({
@@ -238,8 +248,11 @@ class IncomeEntryController {
    * GET /api/v1/associations/:associationId/income-entries
    */
   async getIncomeEntries(req, res) {
-    console.log('🔍 DEBUG: this =', this);
-      console.log('🔍 DEBUG: typeof this.getIncomeStatistics =', typeof this.getIncomeStatistics);
+    console.log("🔍 DEBUG: this =", this);
+    console.log(
+      "🔍 DEBUG: typeof this.getIncomeStatistics =",
+      typeof this.getIncomeStatistics
+    );
     try {
       const { associationId } = req.params;
       const {
@@ -662,7 +675,7 @@ class IncomeEntryController {
    * 📊 Statistiques entrées d'argent
    */
   async getIncomeStatistics(associationId, whereClause = {}) {
-    console.log('✅ getIncomeStatistics appelée');
+    console.log("✅ getIncomeStatistics appelée");
     try {
       whereClause.associationId = associationId;
 
@@ -1520,8 +1533,6 @@ class IncomeEntryController {
       });
     }
   }
-
-
 }
 
 // 🔧 FONCTIONS UTILITAIRES

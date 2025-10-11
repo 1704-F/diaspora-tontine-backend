@@ -338,17 +338,118 @@ router.delete('/:associationId/expense-requests/:requestId',
 // ⚖️ ROUTES VALIDATION/APPROBATION
 
 /**
- * @route POST /api/v1/associations/:associationId/expense-requests/:requestId/validate
- * @desc Valider/rejeter/demander infos pour une demande
- * @access Bureau avec droits validation
+ * @route POST /api/v1/associations/:associationId/expense-requests/:requestId/approve
+ * @desc Approuver une demande de dépense
+ * @access Bureau avec droits validation (president, tresorier, secretaire, admin_association)
  */
-router.post('/:associationId/expense-requests/:requestId/validate',
+router.post('/:associationId/expense-requests/:requestId/approve',
   authMiddleware,
   checkAssociationMember,
-  // ✅ CORRECTION: Utiliser le middleware centralisé
   checkFinancialValidationRights(),
-  validateApprovalAction,
-  expenseRequestController.validateExpenseRequest
+  [
+    param('associationId')
+      .isInt({ min: 1 })
+      .withMessage('ID association invalide'),
+      
+    param('requestId')
+      .isInt({ min: 1 })
+      .withMessage('ID demande invalide'),
+      
+    body('comment')
+      .optional()
+      .trim()
+      .isLength({ max: 1000 })
+      .withMessage('Commentaire max 1000 caractères'),
+      
+    body('amountApproved')
+      .optional()
+      .isFloat({ min: 0.01 })
+      .withMessage('Montant approuvé invalide'),
+      
+    body('conditions')
+      .optional()
+      .trim()
+      .isLength({ max: 1000 })
+      .withMessage('Conditions max 1000 caractères'),
+      
+    handleValidationErrors
+  ],
+  expenseRequestController.approveExpenseRequest
+);
+
+/**
+ * @route POST /api/v1/associations/:associationId/expense-requests/:requestId/reject
+ * @desc Refuser une demande de dépense
+ * @access Bureau avec droits validation (president, tresorier, secretaire, admin_association)
+ */
+router.post('/:associationId/expense-requests/:requestId/reject',
+  authMiddleware,
+  checkAssociationMember,
+  checkFinancialValidationRights(),
+  [
+    param('associationId')
+      .isInt({ min: 1 })
+      .withMessage('ID association invalide'),
+      
+    param('requestId')
+      .isInt({ min: 1 })
+      .withMessage('ID demande invalide'),
+      
+    body('rejectionReason')
+      .trim()
+      .isLength({ min: 10, max: 1000 })
+      .withMessage('Motif de refus requis (10-1000 caractères)'),
+      
+    handleValidationErrors
+  ],
+  expenseRequestController.rejectExpenseRequest
+);
+
+/**
+ * @route POST /api/v1/associations/:associationId/expense-requests/:requestId/request-info
+ * @desc Demander des informations complémentaires
+ * @access Bureau avec droits validation (president, tresorier, secretaire, admin_association)
+ */
+router.post('/:associationId/expense-requests/:requestId/request-info',
+  authMiddleware,
+  checkAssociationMember,
+  checkFinancialValidationRights(),
+  [
+    param('associationId')
+      .isInt({ min: 1 })
+      .withMessage('ID association invalide'),
+      
+    param('requestId')
+      .isInt({ min: 1 })
+      .withMessage('ID demande invalide'),
+      
+    body('requestedInfo')
+      .trim()
+      .isLength({ min: 10, max: 1000 })
+      .withMessage('Informations demandées requises (10-1000 caractères)'),
+      
+    handleValidationErrors
+  ],
+  expenseRequestController.requestAdditionalInfo
+);
+
+/**
+ * @route GET /api/v1/associations/:associationId/expense-requests-pending
+ * @desc Demandes en attente de validation pour cet utilisateur
+ * @access Bureau avec droits validation
+ */
+router.get('/:associationId/expense-requests-pending',
+  authMiddleware,
+  checkAssociationMember,
+  checkFinancialValidationRights(),
+  [
+    param('associationId')
+      .isInt({ min: 1 })
+      .withMessage('ID association invalide'),
+      
+    handleValidationErrors
+  ],
+  expenseRequestController.getPendingValidations
 );
 
 /**
