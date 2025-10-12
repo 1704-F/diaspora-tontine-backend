@@ -12,502 +12,533 @@ const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 class MemberController {
   // 👥 AJOUTER MEMBRE À ASSOCIATION
   async addMember(req, res) {
-  try {
-    const { associationId } = req.params;
+    try {
+      const { associationId } = req.params;
 
-    console.log("--- DEBUG BACKEND ---");
-    console.log("req.body reçu:", req.body);
-    console.log("associationId:", associationId);
-    
-    const {
-      // Soit userId direct (si utilisateur existe déjà)
-      userId,
-      // Données obligatoires pour créer utilisateur
-      firstName,
-      lastName,
-      phoneNumber,
-      // Données optionnelles dans l'ordre spécifié
-      email,
-      dateOfBirth,
-      gender,
-      address,
-      city,
-      country,
-      postalCode,
-      // Données membership
-      memberType,
-      sectionId,
-      cotisationAmount,
-      autoPaymentEnabled = false,
-      paymentMethodId,
-    } = req.body;
+      console.log("--- DEBUG BACKEND ---");
+      console.log("req.body reçu:", req.body);
+      console.log("associationId:", associationId);
 
-    console.log("Données extraites:", {
-      obligatoires: { userId, firstName, lastName, phoneNumber, memberType },
-      optionnelles: { email, dateOfBirth, gender, address, city, country, postalCode }
-    });
+      const {
+        // Soit userId direct (si utilisateur existe déjà)
+        userId,
+        // Données obligatoires pour créer utilisateur
+        firstName,
+        lastName,
+        phoneNumber,
+        // Données optionnelles dans l'ordre spécifié
+        email,
+        dateOfBirth,
+        gender,
+        address,
+        city,
+        country,
+        postalCode,
+        // Données membership
+        memberType,
+        sectionId,
+        cotisationAmount,
+        autoPaymentEnabled = false,
+        paymentMethodId,
+      } = req.body;
 
-    // Vérifier permissions (bureau central ou responsable section)
-    const requesterMembership = await AssociationMember.findOne({
-      where: {
-        userId: req.user.id,
-        associationId,
-        status: "active",
-      },
-    });
-
-    const userRoles = requesterMembership?.roles || [];
-    const canAddMember =
-      userRoles.includes("admin_association") ||
-      userRoles.includes("president") ||
-      userRoles.includes("central_board") ||
-      userRoles.includes("secretaire") ||
-      userRoles.includes("responsable_section") ||
-      req.user.role === "super_admin";
-
-    if (!canAddMember) {
-      return res.status(403).json({
-        error: "Permissions insuffisantes pour ajouter un membre",
-        code: "INSUFFICIENT_ADD_MEMBER_PERMISSIONS",
-      });
-    }
-
-    // NOUVELLE LOGIQUE : Créer ou trouver l'utilisateur
-    let targetUser;
-
-    if (userId) {
-      // Cas 1 : userId fourni directement
-      targetUser = await User.findByPk(userId);
-      if (!targetUser) {
-        return res.status(404).json({
-          error: "Utilisateur introuvable",
-          code: "USER_NOT_FOUND",
-        });
-      }
-    } else if (firstName && lastName && phoneNumber) {
-      // Cas 2 : Créer/trouver utilisateur par ses données
-
-      // D'abord chercher s'il existe déjà
-      targetUser = await User.findOne({
-        where: { phoneNumber: phoneNumber.trim() },
-      });
-
-      if (!targetUser) {
-        // Créer nouvel utilisateur avec TOUS les champs optionnels
-        targetUser = await User.create({
-          // OBLIGATOIRES
-          firstName: firstName.trim(),
-          lastName: lastName.trim(),
-          phoneNumber: phoneNumber.trim(),
-          // OPTIONNELS dans l'ordre spécifié
-          email: email ? email.trim() : null,
-          dateOfBirth: dateOfBirth || null,
-          gender: gender || null,
-          address: address ? address.trim() : null,
-          city: city ? city.trim() : null,
-          country: country || "FR", // Défaut FR
-          postalCode: postalCode ? postalCode.trim() : null,
-          // STATUT
-          status: "pending_verification",
-        });
-
-        console.log(`Nouvel utilisateur créé avec TOUTES les données:`, {
-          id: targetUser.id,
-          firstName: targetUser.firstName,
-          lastName: targetUser.lastName,
-          phoneNumber: targetUser.phoneNumber,
-          email: targetUser.email,
-          dateOfBirth: targetUser.dateOfBirth,
-          gender: targetUser.gender,
-          address: targetUser.address,
-          city: targetUser.city,
-          country: targetUser.country,
-          postalCode: targetUser.postalCode
-        });
-      } else {
-        console.log(`Utilisateur existant trouvé: ${targetUser.firstName} ${targetUser.lastName}`);
-      }
-    } else {
-      return res.status(400).json({
-        error: "userId OU (firstName + lastName + phoneNumber) requis",
-        code: "MISSING_USER_DATA",
-      });
-    }
-
-    // Vérifier qu'il n'est pas déjà membre
-    const existingMembership = await AssociationMember.findOne({
-      where: {
-        userId: targetUser.id,
-        associationId,
-      },
-    });
-
-    if (existingMembership) {
-      return res.status(400).json({
-        error: "Utilisateur déjà membre de cette association",
-        code: "ALREADY_MEMBER",
-        currentStatus: existingMembership.status,
-      });
-    }
-
-    // Récupérer config association pour validation
-    const association = await Association.findByPk(associationId);
-    const memberTypesConfig = association.memberTypes || [];
-    const memberTypeExists = memberTypesConfig.find(
-      (type) => type.name === memberType
-    );
-
-    if (!memberTypeExists) {
-      return res.status(400).json({
-        error: "Type de membre invalide",
-        code: "INVALID_MEMBER_TYPE",
-        available: memberTypesConfig.map((type) => type.name),
-      });
-    }
-
-    // Si section spécifiée, vérifier qu'elle existe
-    if (sectionId) {
-      const section = await Section.findOne({
-        where: { id: sectionId, associationId },
-      });
-
-      if (!section) {
-        return res.status(404).json({
-          error: "Section introuvable",
-          code: "SECTION_NOT_FOUND",
-        });
-      }
-    }
-
-    // Déterminer montant cotisation
-    const finalCotisationAmount =
-      cotisationAmount || memberTypeExists.cotisationAmount;
-
-    // Créer le membre
-    const member = await AssociationMember.create({
-      userId: targetUser.id,
-      associationId,
-      sectionId,
-      memberType,
-      status: "active",
-      cotisationAmount: finalCotisationAmount,
-      autoPaymentEnabled,
-      paymentMethodId,
-      joinDate: new Date(),
-      approvedDate: new Date(),
-      approvedBy: req.user.id,
-      roles: [],
-      permissions: memberTypeExists.permissions || [],
-    });
-
-    // Charger membre complet pour retour
-    const memberComplete = await AssociationMember.findByPk(member.id, {
-      include: [
-        {
-          model: User,
-          as: "user",
-          attributes: [
-            "id", "firstName", "lastName", "phoneNumber", "email",
-            "dateOfBirth", "gender", "address", "city", "country", "postalCode"
-          ],
+      console.log("Données extraites:", {
+        obligatoires: { userId, firstName, lastName, phoneNumber, memberType },
+        optionnelles: {
+          email,
+          dateOfBirth,
+          gender,
+          address,
+          city,
+          country,
+          postalCode,
         },
-        {
-          model: Section,
-          as: "section",
-          attributes: ["id", "name", "country"],
-        },
-        { model: Association, as: "association", attributes: ["id", "name"] },
-      ],
-    });
-
-    res.status(201).json({
-      success: true,
-      message: "Membre ajouté avec succès",
-      data: { member: memberComplete },
-    });
-  } catch (error) {
-    console.error("Erreur ajout membre:", error);
-    res.status(500).json({
-      error: "Erreur ajout membre",
-      code: "ADD_MEMBER_ERROR",
-      details: error.message,
-    });
-  }
-}
-
-  async updateMember(req, res) {
-  try {
-    const { associationId, memberId } = req.params;
-    const { memberType, status, sectionId, roles } = req.body;
-
-    // Vérifier accès association avec permissions admin
-    const membership = await AssociationMember.findOne({
-      where: {
-        userId: req.user.id,
-        associationId,
-        status: "active",
-      },
-    });
-
-    const canUpdateMember =
-      membership?.roles?.includes("admin_association") ||
-      membership?.roles?.includes("president") ||
-      req.user.role === "super_admin";
-
-    if (!canUpdateMember) {
-      return res.status(403).json({
-        error: "Permission insuffisante pour modifier un membre",
-        code: "UPDATE_MEMBER_DENIED",
       });
-    }
 
-    // Récupérer le membre à modifier avec ses infos utilisateur
-    const memberToUpdate = await AssociationMember.findOne({
-      where: {
-        id: memberId,
-        associationId,
-      },
-      include: [
-        {
-          model: User,
-          as: "user",
-          attributes: ["id", "firstName", "lastName", "phoneNumber"],
-        },
-      ],
-    });
-
-    if (!memberToUpdate) {
-      return res.status(404).json({
-        error: "Membre introuvable",
-        code: "MEMBER_NOT_FOUND",
-      });
-    }
-
-    // Protection admin : vérifier s'il reste d'autres admins si on retire le rôle admin
-    if (
-      roles &&
-      !roles.includes("admin_association") &&
-      memberToUpdate.roles?.includes("admin_association")
-    ) {
-      const otherAdmins = await AssociationMember.count({
+      // Vérifier permissions (bureau central ou responsable section)
+      const requesterMembership = await AssociationMember.findOne({
         where: {
+          userId: req.user.id,
           associationId,
           status: "active",
-          [Op.and]: [
-            sequelize.literal(`roles::jsonb @> '["admin_association"]'::jsonb`)
-          ],
-          id: {
-            [Op.ne]: memberId,
-          },
         },
       });
 
-      if (otherAdmins === 0) {
-        return res.status(400).json({
-          error:
-            "Impossible de retirer le rôle admin : aucun autre administrateur",
-          code: "LAST_ADMIN_PROTECTION",
+      const userRoles = requesterMembership?.roles || [];
+      const canAddMember =
+        userRoles.includes("admin_association") ||
+        userRoles.includes("president") ||
+        userRoles.includes("central_board") ||
+        userRoles.includes("secretaire") ||
+        userRoles.includes("responsable_section") ||
+        req.user.role === "super_admin";
+
+      if (!canAddMember) {
+        return res.status(403).json({
+          error: "Permissions insuffisantes pour ajouter un membre",
+          code: "INSUFFICIENT_ADD_MEMBER_PERMISSIONS",
         });
       }
-    }
 
-    // Vérifier que la section existe si fournie
-    if (sectionId) {
-      const sectionExists = await Section.findOne({
+      // NOUVELLE LOGIQUE : Créer ou trouver l'utilisateur
+      let targetUser;
+
+      if (userId) {
+        // Cas 1 : userId fourni directement
+        targetUser = await User.findByPk(userId);
+        if (!targetUser) {
+          return res.status(404).json({
+            error: "Utilisateur introuvable",
+            code: "USER_NOT_FOUND",
+          });
+        }
+      } else if (firstName && lastName && phoneNumber) {
+        // Cas 2 : Créer/trouver utilisateur par ses données
+
+        // D'abord chercher s'il existe déjà
+        targetUser = await User.findOne({
+          where: { phoneNumber: phoneNumber.trim() },
+        });
+
+        if (!targetUser) {
+          // Créer nouvel utilisateur avec TOUS les champs optionnels
+          targetUser = await User.create({
+            // OBLIGATOIRES
+            firstName: firstName.trim(),
+            lastName: lastName.trim(),
+            phoneNumber: phoneNumber.trim(),
+            // OPTIONNELS dans l'ordre spécifié
+            email: email ? email.trim() : null,
+            dateOfBirth: dateOfBirth || null,
+            gender: gender || null,
+            address: address ? address.trim() : null,
+            city: city ? city.trim() : null,
+            country: country || "FR", // Défaut FR
+            postalCode: postalCode ? postalCode.trim() : null,
+            // STATUT
+            status: "pending_verification",
+          });
+
+          console.log(`Nouvel utilisateur créé avec TOUTES les données:`, {
+            id: targetUser.id,
+            firstName: targetUser.firstName,
+            lastName: targetUser.lastName,
+            phoneNumber: targetUser.phoneNumber,
+            email: targetUser.email,
+            dateOfBirth: targetUser.dateOfBirth,
+            gender: targetUser.gender,
+            address: targetUser.address,
+            city: targetUser.city,
+            country: targetUser.country,
+            postalCode: targetUser.postalCode,
+          });
+        } else {
+          console.log(
+            `Utilisateur existant trouvé: ${targetUser.firstName} ${targetUser.lastName}`
+          );
+        }
+      } else {
+        return res.status(400).json({
+          error: "userId OU (firstName + lastName + phoneNumber) requis",
+          code: "MISSING_USER_DATA",
+        });
+      }
+
+      // Vérifier qu'il n'est pas déjà membre
+      const existingMembership = await AssociationMember.findOne({
         where: {
-          id: sectionId,
+          userId: targetUser.id,
           associationId,
         },
       });
 
-      if (!sectionExists) {
+      if (existingMembership) {
         return res.status(400).json({
-          error: "Section introuvable",
-          code: "SECTION_NOT_FOUND",
+          error: "Utilisateur déjà membre de cette association",
+          code: "ALREADY_MEMBER",
+          currentStatus: existingMembership.status,
         });
       }
-    }
 
-    // Préparer les données de mise à jour
-    const updateData = {};
-
-    // Gérer le type de membre et sa cotisation automatique
-    if (memberType !== undefined) {
+      // Récupérer config association pour validation
       const association = await Association.findByPk(associationId);
-      const memberTypeConfig = association?.memberTypes?.find(
+      const memberTypesConfig = association.memberTypes || [];
+      const memberTypeExists = memberTypesConfig.find(
         (type) => type.name === memberType
       );
 
-      if (!memberTypeConfig) {
+      if (!memberTypeExists) {
         return res.status(400).json({
           error: "Type de membre invalide",
           code: "INVALID_MEMBER_TYPE",
+          available: memberTypesConfig.map((type) => type.name),
         });
       }
 
-      updateData.memberType = memberType;
-      updateData.cotisationAmount = memberTypeConfig.cotisationAmount;
-    }
+      // Si section spécifiée, vérifier qu'elle existe
+      if (sectionId) {
+        const section = await Section.findOne({
+          where: { id: sectionId, associationId },
+        });
 
-    if (status !== undefined) updateData.status = status;
-    if (sectionId !== undefined) updateData.sectionId = sectionId;
-    
-    // ✅ GESTION DES RÔLES UNIQUES
-    if (roles !== undefined) {
-      // Rôles qui ne peuvent être attribués qu'à une seule personne
-      const uniqueRoles = ['president', 'secretaire', 'tresorier'];
-      const rolesToAssign = roles.filter(role => uniqueRoles.includes(role));
-      
-      if (rolesToAssign.length > 0) {
-        console.log('🔄 Retrait des rôles uniques des autres membres:', rolesToAssign);
-        
-        // Pour chaque rôle unique à assigner
-        for (const roleToAssign of rolesToAssign) {
-          // Trouver tous les autres membres qui ont ce rôle
-          const membersWithRole = await AssociationMember.findAll({
-            where: {
-              associationId,
-              status: 'active',
-              id: { [Op.ne]: memberId }, // Exclure le membre actuel
-              [Op.and]: [
-                sequelize.literal(`roles::jsonb @> '["${roleToAssign}"]'::jsonb`)
-              ]
-            }
+        if (!section) {
+          return res.status(404).json({
+            error: "Section introuvable",
+            code: "SECTION_NOT_FOUND",
           });
-          
-          // Retirer le rôle de ces membres
-          for (const member of membersWithRole) {
-            const currentRoles = member.roles || [];
-            const updatedRoles = currentRoles.filter(r => r !== roleToAssign);
-            
-            await member.update({ roles: updatedRoles });
-            console.log(`📤 Rôle ${roleToAssign} retiré du membre ${member.id}`);
-          }
         }
       }
-      
-      updateData.roles = roles;
-    }
 
-    // Mettre à jour le membre
-    await memberToUpdate.update(updateData);
+      // Déterminer montant cotisation
+      const finalCotisationAmount =
+        cotisationAmount || memberTypeExists.cotisationAmount;
 
-    // SYNCHRONISATION DU BUREAU CENTRAL
-    if (
-      roles &&
-      (roles.includes("president") ||
-        roles.includes("secretaire") ||
-        roles.includes("tresorier"))
-    ) {
-      // Récupérer l'association avec son bureau actuel
-      const association = await Association.findByPk(associationId);
-      const currentBureau = association.centralBoard || {};
-      const updatedBureau = { ...currentBureau };
-
-      // ✅ RETIRER LES ANCIENS TITULAIRES DES POSTES
-      if (roles.includes("president")) {
-        // Supprimer l'ancien président du bureau
-        delete updatedBureau.president;
-      }
-      if (roles.includes("secretaire")) {
-        // Supprimer l'ancien secrétaire du bureau
-        delete updatedBureau.secretaire;
-      }
-      if (roles.includes("tresorier")) {
-        // Supprimer l'ancien trésorier du bureau
-        delete updatedBureau.tresorier;
-      }
-
-      // Assigner aux nouveaux postes
-      if (roles.includes("president")) {
-        updatedBureau.president = {
-          userId: memberToUpdate.userId,
-          name: `${memberToUpdate.user.firstName} ${memberToUpdate.user.lastName}`,
-          phoneNumber: memberToUpdate.user.phoneNumber,
-          role: "president",
-          assignedAt: new Date(),
-        };
-      }
-
-      if (roles.includes("secretaire")) {
-        updatedBureau.secretaire = {
-          userId: memberToUpdate.userId,
-          name: `${memberToUpdate.user.firstName} ${memberToUpdate.user.lastName}`,
-          phoneNumber: memberToUpdate.user.phoneNumber,
-          role: "secretaire",
-          assignedAt: new Date(),
-        };
-      }
-
-      if (roles.includes("tresorier")) {
-        updatedBureau.tresorier = {
-          userId: memberToUpdate.userId,
-          name: `${memberToUpdate.user.firstName} ${memberToUpdate.user.lastName}`,
-          phoneNumber: memberToUpdate.user.phoneNumber,
-          role: "tresorier",
-          assignedAt: new Date(),
-        };
-      }
-
-      // Sauvegarder le bureau mis à jour
-      await association.update({ centralBoard: updatedBureau });
-      console.log("🏛️ Bureau central synchronisé:", updatedBureau);
-    }
-
-    // Si on retire tous les rôles de bureau, supprimer du bureau central
-    if (
-      roles &&
-      !roles.includes("president") &&
-      !roles.includes("secretaire") &&
-      !roles.includes("tresorier")
-    ) {
-      const association = await Association.findByPk(associationId);
-      const currentBureau = association.centralBoard || {};
-      const updatedBureau = { ...currentBureau };
-
-      // Supprimer l'utilisateur du bureau
-      Object.keys(updatedBureau).forEach((poste) => {
-        if (updatedBureau[poste]?.userId === memberToUpdate.userId) {
-          delete updatedBureau[poste];
-        }
+      // Créer le membre
+      const member = await AssociationMember.create({
+        userId: targetUser.id,
+        associationId,
+        sectionId,
+        memberType,
+        status: "active",
+        cotisationAmount: finalCotisationAmount,
+        autoPaymentEnabled,
+        paymentMethodId,
+        joinDate: new Date(),
+        approvedDate: new Date(),
+        approvedBy: req.user.id,
+        roles: [],
+        permissions: memberTypeExists.permissions || [],
       });
 
-      await association.update({ centralBoard: updatedBureau });
-      console.log("🗑️ Membre retiré du bureau central");
+      // Charger membre complet pour retour
+      const memberComplete = await AssociationMember.findByPk(member.id, {
+        include: [
+          {
+            model: User,
+            as: "user",
+            attributes: [
+              "id",
+              "firstName",
+              "lastName",
+              "phoneNumber",
+              "email",
+              "dateOfBirth",
+              "gender",
+              "address",
+              "city",
+              "country",
+              "postalCode",
+            ],
+          },
+          {
+            model: Section,
+            as: "section",
+            attributes: ["id", "name", "country"],
+          },
+          { model: Association, as: "association", attributes: ["id", "name"] },
+        ],
+      });
+
+      res.status(201).json({
+        success: true,
+        message: "Membre ajouté avec succès",
+        data: { member: memberComplete },
+      });
+    } catch (error) {
+      console.error("Erreur ajout membre:", error);
+      res.status(500).json({
+        error: "Erreur ajout membre",
+        code: "ADD_MEMBER_ERROR",
+        details: error.message,
+      });
     }
-
-    // Récupérer le membre mis à jour avec toutes ses relations
-    const updatedMember = await AssociationMember.findOne({
-      where: { id: memberId },
-      include: [
-        {
-          model: User,
-          as: "user",
-          attributes: ["id", "firstName", "lastName", "phoneNumber", "email"],
-        },
-        {
-          model: Section,
-          as: "section",
-          attributes: ["id", "name", "country", "city"],
-        },
-      ],
-    });
-
-    res.json({
-      success: true,
-      message: "Membre mis à jour avec succès",
-      data: { member: updatedMember },
-    });
-  } catch (error) {
-    console.error("Erreur mise à jour membre:", error);
-    res.status(500).json({
-      error: "Erreur mise à jour membre",
-      code: "MEMBER_UPDATE_ERROR",
-      details: error.message,
-    });
   }
-}
 
+  async updateMember(req, res) {
+    try {
+      const { associationId, memberId } = req.params;
+      const { memberType, status, sectionId, roles } = req.body;
+
+      // Vérifier accès association avec permissions admin
+      const membership = await AssociationMember.findOne({
+        where: {
+          userId: req.user.id,
+          associationId,
+          status: "active",
+        },
+      });
+
+      const canUpdateMember =
+        membership?.roles?.includes("admin_association") ||
+        membership?.roles?.includes("president") ||
+        req.user.role === "super_admin";
+
+      if (!canUpdateMember) {
+        return res.status(403).json({
+          error: "Permission insuffisante pour modifier un membre",
+          code: "UPDATE_MEMBER_DENIED",
+        });
+      }
+
+      // Récupérer le membre à modifier avec ses infos utilisateur
+      const memberToUpdate = await AssociationMember.findOne({
+        where: {
+          id: memberId,
+          associationId,
+        },
+        include: [
+          {
+            model: User,
+            as: "user",
+            attributes: ["id", "firstName", "lastName", "phoneNumber"],
+          },
+        ],
+      });
+
+      if (!memberToUpdate) {
+        return res.status(404).json({
+          error: "Membre introuvable",
+          code: "MEMBER_NOT_FOUND",
+        });
+      }
+
+      // Protection admin : vérifier s'il reste d'autres admins si on retire le rôle admin
+      if (
+        roles &&
+        !roles.includes("admin_association") &&
+        memberToUpdate.roles?.includes("admin_association")
+      ) {
+        const otherAdmins = await AssociationMember.count({
+          where: {
+            associationId,
+            status: "active",
+            [Op.and]: [
+              sequelize.literal(
+                `roles::jsonb @> '["admin_association"]'::jsonb`
+              ),
+            ],
+            id: {
+              [Op.ne]: memberId,
+            },
+          },
+        });
+
+        if (otherAdmins === 0) {
+          return res.status(400).json({
+            error:
+              "Impossible de retirer le rôle admin : aucun autre administrateur",
+            code: "LAST_ADMIN_PROTECTION",
+          });
+        }
+      }
+
+      // Vérifier que la section existe si fournie
+      if (sectionId) {
+        const sectionExists = await Section.findOne({
+          where: {
+            id: sectionId,
+            associationId,
+          },
+        });
+
+        if (!sectionExists) {
+          return res.status(400).json({
+            error: "Section introuvable",
+            code: "SECTION_NOT_FOUND",
+          });
+        }
+      }
+
+      // Préparer les données de mise à jour
+      const updateData = {};
+
+      // Gérer le type de membre et sa cotisation automatique
+      if (memberType !== undefined) {
+        const association = await Association.findByPk(associationId);
+        const memberTypeConfig = association?.memberTypes?.find(
+          (type) => type.name === memberType
+        );
+
+        if (!memberTypeConfig) {
+          return res.status(400).json({
+            error: "Type de membre invalide",
+            code: "INVALID_MEMBER_TYPE",
+          });
+        }
+
+        updateData.memberType = memberType;
+        updateData.cotisationAmount = memberTypeConfig.cotisationAmount;
+      }
+
+      if (status !== undefined) updateData.status = status;
+      if (sectionId !== undefined) updateData.sectionId = sectionId;
+
+      // ✅ GESTION DES RÔLES UNIQUES
+      if (roles !== undefined) {
+        // Rôles qui ne peuvent être attribués qu'à une seule personne
+        const uniqueRoles = ["president", "secretaire", "tresorier"];
+        const rolesToAssign = roles.filter((role) =>
+          uniqueRoles.includes(role)
+        );
+
+        if (rolesToAssign.length > 0) {
+          console.log(
+            "🔄 Retrait des rôles uniques des autres membres:",
+            rolesToAssign
+          );
+
+          // Pour chaque rôle unique à assigner
+          for (const roleToAssign of rolesToAssign) {
+            // Trouver tous les autres membres qui ont ce rôle
+            const membersWithRole = await AssociationMember.findAll({
+              where: {
+                associationId,
+                status: "active",
+                id: { [Op.ne]: memberId }, // Exclure le membre actuel
+                [Op.and]: [
+                  sequelize.literal(
+                    `roles::jsonb @> '["${roleToAssign}"]'::jsonb`
+                  ),
+                ],
+              },
+            });
+
+            // Retirer le rôle de ces membres
+            for (const member of membersWithRole) {
+              const currentRoles = member.roles || [];
+              const updatedRoles = currentRoles.filter(
+                (r) => r !== roleToAssign
+              );
+
+              await member.update({ roles: updatedRoles });
+              console.log(
+                `📤 Rôle ${roleToAssign} retiré du membre ${member.id}`
+              );
+            }
+          }
+        }
+
+        updateData.roles = roles;
+      }
+
+      // Mettre à jour le membre
+      await memberToUpdate.update(updateData);
+
+      // SYNCHRONISATION DU BUREAU CENTRAL
+      if (
+        roles &&
+        (roles.includes("president") ||
+          roles.includes("secretaire") ||
+          roles.includes("tresorier"))
+      ) {
+        // Récupérer l'association avec son bureau actuel
+        const association = await Association.findByPk(associationId);
+        const currentBureau = association.centralBoard || {};
+        const updatedBureau = { ...currentBureau };
+
+        // ✅ RETIRER LES ANCIENS TITULAIRES DES POSTES
+        if (roles.includes("president")) {
+          // Supprimer l'ancien président du bureau
+          delete updatedBureau.president;
+        }
+        if (roles.includes("secretaire")) {
+          // Supprimer l'ancien secrétaire du bureau
+          delete updatedBureau.secretaire;
+        }
+        if (roles.includes("tresorier")) {
+          // Supprimer l'ancien trésorier du bureau
+          delete updatedBureau.tresorier;
+        }
+
+        // Assigner aux nouveaux postes
+        if (roles.includes("president")) {
+          updatedBureau.president = {
+            userId: memberToUpdate.userId,
+            name: `${memberToUpdate.user.firstName} ${memberToUpdate.user.lastName}`,
+            phoneNumber: memberToUpdate.user.phoneNumber,
+            role: "president",
+            assignedAt: new Date(),
+          };
+        }
+
+        if (roles.includes("secretaire")) {
+          updatedBureau.secretaire = {
+            userId: memberToUpdate.userId,
+            name: `${memberToUpdate.user.firstName} ${memberToUpdate.user.lastName}`,
+            phoneNumber: memberToUpdate.user.phoneNumber,
+            role: "secretaire",
+            assignedAt: new Date(),
+          };
+        }
+
+        if (roles.includes("tresorier")) {
+          updatedBureau.tresorier = {
+            userId: memberToUpdate.userId,
+            name: `${memberToUpdate.user.firstName} ${memberToUpdate.user.lastName}`,
+            phoneNumber: memberToUpdate.user.phoneNumber,
+            role: "tresorier",
+            assignedAt: new Date(),
+          };
+        }
+
+        // Sauvegarder le bureau mis à jour
+        await association.update({ centralBoard: updatedBureau });
+        console.log("🏛️ Bureau central synchronisé:", updatedBureau);
+      }
+
+      // Si on retire tous les rôles de bureau, supprimer du bureau central
+      if (
+        roles &&
+        !roles.includes("president") &&
+        !roles.includes("secretaire") &&
+        !roles.includes("tresorier")
+      ) {
+        const association = await Association.findByPk(associationId);
+        const currentBureau = association.centralBoard || {};
+        const updatedBureau = { ...currentBureau };
+
+        // Supprimer l'utilisateur du bureau
+        Object.keys(updatedBureau).forEach((poste) => {
+          if (updatedBureau[poste]?.userId === memberToUpdate.userId) {
+            delete updatedBureau[poste];
+          }
+        });
+
+        await association.update({ centralBoard: updatedBureau });
+        console.log("🗑️ Membre retiré du bureau central");
+      }
+
+      // Récupérer le membre mis à jour avec toutes ses relations
+      const updatedMember = await AssociationMember.findOne({
+        where: { id: memberId },
+        include: [
+          {
+            model: User,
+            as: "user",
+            attributes: ["id", "firstName", "lastName", "phoneNumber", "email"],
+          },
+          {
+            model: Section,
+            as: "section",
+            attributes: ["id", "name", "country", "city"],
+          },
+        ],
+      });
+
+      res.json({
+        success: true,
+        message: "Membre mis à jour avec succès",
+        data: { member: updatedMember },
+      });
+    } catch (error) {
+      console.error("Erreur mise à jour membre:", error);
+      res.status(500).json({
+        error: "Erreur mise à jour membre",
+        code: "MEMBER_UPDATE_ERROR",
+        details: error.message,
+      });
+    }
+  }
 
   // 📋 LISTER MEMBRES ASSOCIATION
   async listMembers(req, res) {
@@ -539,22 +570,8 @@ class MemberController {
         });
       }
 
-      // Vérifier permission voir liste membres
-      const userRoles = membership?.roles || [];
-      const canViewMembers =
-        userRoles.includes("admin_association") ||
-        userRoles.includes("president") ||
-        userRoles.includes("central_board") ||
-        userRoles.includes("secretaire") ||
-        userRoles.includes("responsable_section") ||
-        req.user.role === "super_admin";
-
-      if (!canViewMembers) {
-        return res.status(403).json({
-          error: "Permission voir membres non accordée",
-          code: "VIEW_MEMBERS_DENIED",
-        });
-      }
+      // ✅ SUPPRIMÉ - Le middleware checkPermission('view_members') gère déjà ça !
+      // Plus besoin de vérifier canViewMembers ici
 
       // Construire filtres
       const whereClause = { associationId };
@@ -595,7 +612,6 @@ class MemberController {
         },
       ];
 
-      // Récupérer membres
       const { rows: members, count } = await AssociationMember.findAndCountAll({
         where: whereClause,
         include: includes,
@@ -604,12 +620,9 @@ class MemberController {
         order: [["created_at", "DESC"]],
       });
 
-      // Vérifier permission finances
+      // ✅ NOUVEAU : Vérifier permission finances avec RBAC
       const canViewFinances =
-        userRoles.includes("admin_association") ||
-        userRoles.includes("president") ||
-        userRoles.includes("tresorier") ||
-        req.user.role === "super_admin";
+        membership?.isAdmin || req.user.role === "super_admin";
 
       // Formater les membres pour le frontend
       const formattedMembers = members.map((member) => {
@@ -618,9 +631,9 @@ class MemberController {
           userId: member.userId,
           user: {
             id: member.user.id,
-            firstName: member.user.firstName, // ✅ Direct camelCase
-            lastName: member.user.lastName, // ✅ Direct camelCase
-            phoneNumber: member.user.phoneNumber, // ✅ Direct camelCase
+            firstName: member.user.firstName,
+            lastName: member.user.lastName,
+            phoneNumber: member.user.phoneNumber,
             email: member.user.email,
           },
           memberType: member.memberType,
@@ -2251,73 +2264,85 @@ class MemberController {
         very_late: 0,
       };
 
-      const membersWithStatus = members.map(member => {
-  // Récupérer montant attendu selon le type de membre
-  const memberTypeConfig = association.memberTypes?.find(type => type.name === member.memberType);
-  const expectedAmount = memberTypeConfig?.cotisationAmount || 0;
-  totalExpected += expectedAmount;
+      const membersWithStatus = members.map((member) => {
+        // Récupérer montant attendu selon le type de membre
+        const memberTypeConfig = association.memberTypes?.find(
+          (type) => type.name === member.memberType
+        );
+        const expectedAmount = memberTypeConfig?.cotisationAmount || 0;
+        totalExpected += expectedAmount;
 
-  // Récupérer les transactions du membre pour cette période
-  const memberTransactions = transactionsMap.get(member.id) || [];
-  
-  // Vérifier si le membre a payé ce mois
-  const completedPayment = memberTransactions.find(t => t.status === 'completed');
-  const pendingPayment = memberTransactions.find(t => t.status === 'pending'); // ✅ AJOUTER CETTE LIGNE
-  
-  const paidAmount = completedPayment ? parseFloat(completedPayment.amount) : 0;
-  
-  if (paidAmount > 0) {
-    totalCollected += paidAmount;
-  } else {
-    totalPending += expectedAmount;
-  }
+        // Récupérer les transactions du membre pour cette période
+        const memberTransactions = transactionsMap.get(member.id) || [];
 
-  // Calculer le retard
-  const now = new Date();
-  const deadlineDate = new Date(year, month - 1, 5); // 5ème jour du mois
-  const daysSinceDeadline = Math.floor((now - deadlineDate) / (1000 * 60 * 60 * 24));
-  
-  let cotisationStatus = 'paid';
-  if (!completedPayment) {
-    if (daysSinceDeadline > 60) {
-      cotisationStatus = 'very_late';
-    } else if (daysSinceDeadline > 30) {
-      cotisationStatus = 'late';
-    } else {
-      cotisationStatus = 'pending';
-    }
-  }
+        // Vérifier si le membre a payé ce mois
+        const completedPayment = memberTransactions.find(
+          (t) => t.status === "completed"
+        );
+        const pendingPayment = memberTransactions.find(
+          (t) => t.status === "pending"
+        ); // ✅ AJOUTER CETTE LIGNE
 
-  statusCounts[cotisationStatus]++;
+        const paidAmount = completedPayment
+          ? parseFloat(completedPayment.amount)
+          : 0;
 
-  return {
-    id: member.id,
-    userId: member.userId,
-    user: {
-      id: member.user.id,
-      firstName: member.user.firstName,
-      lastName: member.user.lastName,
-      phoneNumber: member.user.phoneNumber,
-      email: member.user.email
-    },
-    memberType: member.memberType,
-    section: member.section ? {
-      id: member.section.id,
-      name: member.section.name,
-      country: member.section.country,
-      city: member.section.city
-    } : null,
-    expectedAmount,
-    paidAmount,
-    paymentMethod: completedPayment?.paymentMethod || null,
-    cotisationStatus,
-    hasPendingValidation: !!pendingPayment, // ✅ AJOUTER CETTE LIGNE
-    paymentDate: completedPayment?.completedAt || null,
-    daysSinceDeadline: Math.max(0, daysSinceDeadline),
-    joinDate: member.joinDate,
-    roles: member.roles || []
-  };
-});
+        if (paidAmount > 0) {
+          totalCollected += paidAmount;
+        } else {
+          totalPending += expectedAmount;
+        }
+
+        // Calculer le retard
+        const now = new Date();
+        const deadlineDate = new Date(year, month - 1, 5); // 5ème jour du mois
+        const daysSinceDeadline = Math.floor(
+          (now - deadlineDate) / (1000 * 60 * 60 * 24)
+        );
+
+        let cotisationStatus = "paid";
+        if (!completedPayment) {
+          if (daysSinceDeadline > 60) {
+            cotisationStatus = "very_late";
+          } else if (daysSinceDeadline > 30) {
+            cotisationStatus = "late";
+          } else {
+            cotisationStatus = "pending";
+          }
+        }
+
+        statusCounts[cotisationStatus]++;
+
+        return {
+          id: member.id,
+          userId: member.userId,
+          user: {
+            id: member.user.id,
+            firstName: member.user.firstName,
+            lastName: member.user.lastName,
+            phoneNumber: member.user.phoneNumber,
+            email: member.user.email,
+          },
+          memberType: member.memberType,
+          section: member.section
+            ? {
+                id: member.section.id,
+                name: member.section.name,
+                country: member.section.country,
+                city: member.section.city,
+              }
+            : null,
+          expectedAmount,
+          paidAmount,
+          paymentMethod: completedPayment?.paymentMethod || null,
+          cotisationStatus,
+          hasPendingValidation: !!pendingPayment, // ✅ AJOUTER CETTE LIGNE
+          paymentDate: completedPayment?.completedAt || null,
+          daysSinceDeadline: Math.max(0, daysSinceDeadline),
+          joinDate: member.joinDate,
+          roles: member.roles || [],
+        };
+      });
 
       // 5. Filtrer par statut si demandé
       let filteredMembers = membersWithStatus;
@@ -2575,35 +2600,41 @@ class MemberController {
         if (association.isMultiSection && targetMember.sectionId) {
           // Association multi-sections : trésorier de section OU bureau central
           const sectionTreasurers = await AssociationMember.findAll({
-  where: {
-    associationId,
-    sectionId: targetMember.sectionId,
-    status: 'active',
-    [Op.and]: [
-      sequelize.literal(`roles::jsonb @> '["tresorier_section"]'::jsonb`)
-    ]
-  },
-  include: [{
-    model: User,
-    as: 'user',
-    attributes: ['firstName', 'lastName']
-  }]
-});
+            where: {
+              associationId,
+              sectionId: targetMember.sectionId,
+              status: "active",
+              [Op.and]: [
+                sequelize.literal(
+                  `roles::jsonb @> '["tresorier_section"]'::jsonb`
+                ),
+              ],
+            },
+            include: [
+              {
+                model: User,
+                as: "user",
+                attributes: ["firstName", "lastName"],
+              },
+            ],
+          });
 
           const centralTreasurers = await AssociationMember.findAll({
-  where: {
-    associationId,
-    status: 'active',
-    [Op.and]: [
-      sequelize.literal(`roles::jsonb @> '["tresorier"]'::jsonb`)
-    ]
-  },
-  include: [{
-    model: User,
-    as: 'user',
-    attributes: ['firstName', 'lastName']
-  }]
-});
+            where: {
+              associationId,
+              status: "active",
+              [Op.and]: [
+                sequelize.literal(`roles::jsonb @> '["tresorier"]'::jsonb`),
+              ],
+            },
+            include: [
+              {
+                model: User,
+                as: "user",
+                attributes: ["firstName", "lastName"],
+              },
+            ],
+          });
 
           validatorInfo = {
             sectionValidators: sectionTreasurers,
@@ -2612,19 +2643,21 @@ class MemberController {
         } else {
           // Association simple : trésorier central uniquement
           const treasurers = await AssociationMember.findAll({
-  where: {
-    associationId,
-    status: 'active',
-    [Op.and]: [
-      sequelize.literal(`roles::jsonb @> '["tresorier"]'::jsonb`)
-    ]
-  },
-  include: [{
-    model: User,
-    as: 'user',
-    attributes: ['firstName', 'lastName']
-  }]
-});
+            where: {
+              associationId,
+              status: "active",
+              [Op.and]: [
+                sequelize.literal(`roles::jsonb @> '["tresorier"]'::jsonb`),
+              ],
+            },
+            include: [
+              {
+                model: User,
+                as: "user",
+                attributes: ["firstName", "lastName"],
+              },
+            ],
+          });
 
           validatorInfo = {
             validators: treasurers,

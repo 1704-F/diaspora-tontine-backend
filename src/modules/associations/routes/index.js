@@ -10,36 +10,35 @@ const expenseRequestRoutes = require('./expenseRequests');
 const incomeEntriesRoutes = require('./incomeEntries');
 const rolesRoutes = require('./rolesRoutes');
 
-
 // 📋 ASSOCIATION CRUD
 router.use('/', associationRoutes);
 
 // 💰 GESTION FINANCIÈRE - ExpenseRequests & LoanRepayments
 router.use('/', expenseRequestRoutes);
 
-//Routes pour gestion des entrées d'argent personnalisées
+// 💵 Routes pour gestion des entrées d'argent personnalisées
 router.use('/', incomeEntriesRoutes);
 
-//Routes admin
-router.use('/', incomeEntriesRoutes);
-
+// 🔐 ROUTES RBAC - RÔLES ET PERMISSIONS
+router.use('/', rolesRoutes); // ✅ AJOUTÉ
 
 // ❤️ Route de santé du module
 router.get('/health', (req, res) => {
   res.json({
     module: 'associations',
     status: 'operational',
-    version: '1.1.0', // ➕ Version bump
+    version: '1.2.0', // ✅ Version bump
     features: {
       crud: true,
       sections: false, // à implémenter
       members: true,
       cotisations: true,
-      expenseRequests: true,    // ➕ NOUVEAU - Demandes dépenses
-      loanRepayments: true,     // ➕ NOUVEAU - Suivi prêts
-      financialReports: true,   // ➕ NOUVEAU - Rapports financiers
-      balanceCalculation: true, // ➕ NOUVEAU - Calcul solde
-      paymentValidation: true,  // ➕ NOUVEAU - Validation paiements
+      expenseRequests: true,
+      loanRepayments: true,
+      financialReports: true,
+      balanceCalculation: true,
+      paymentValidation: true,
+      rbac: true, // ✅ NOUVEAU - Rôles et permissions
       reports: false // à implémenter
     },
     endpoints: {
@@ -77,6 +76,27 @@ router.get('/health', (req, res) => {
         'GET /:associationId/expense-requests/statistics',
         'GET /:associationId/expense-requests/balance',
         'GET /:associationId/expense-requests/export'
+      ],
+      // ✅ NOUVEAU - Endpoints RBAC
+      roles: [
+        'GET /:associationId/roles',
+        'POST /:associationId/roles',
+        'GET /:associationId/roles/:roleId',
+        'PUT /:associationId/roles/:roleId',
+        'DELETE /:associationId/roles/:roleId'
+      ],
+      memberRoles: [
+        'POST /:associationId/members/:memberId/roles',
+        'DELETE /:associationId/members/:memberId/roles/:roleId',
+        'GET /:associationId/members/:memberId/roles'
+      ],
+      permissions: [
+        'POST /:associationId/members/:memberId/permissions/grant',
+        'POST /:associationId/members/:memberId/permissions/revoke',
+        'GET /:associationId/permissions'
+      ],
+      admin: [
+        'POST /:associationId/transfer-admin'
       ]
     },
     timestamp: new Date().toISOString()
