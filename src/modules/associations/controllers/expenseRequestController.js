@@ -1,5 +1,4 @@
 // src/modules/associations/controllers/expenseRequestController.js
-// Controller ExpenseRequest - suit les patterns existants
 
 const { Op } = require("sequelize");
 const {
@@ -13,6 +12,9 @@ const {
   AssociationMember,
 } = require("../../../models");
 const AssociationBalanceService = require("../services/associationBalanceService");
+
+// ✅ NOUVEAU : Import système RBAC moderne
+const { hasPermission, getEffectivePermissions } = require('../../../core/middleware/checkPermission');
 
 class ExpenseRequestController {
   /**
@@ -42,13 +44,9 @@ class ExpenseRequestController {
         metadata,
       } = req.body;
 
-      // ✅ CONTRÔLE PERMISSIONS UNIFIÉ
-      const userRoles = membership?.roles || [];
-      const isAdmin = userRoles.includes("admin_association");
-      const isBureau = userRoles.some((role) =>
-        ["president", "secretaire", "tresorier"].includes(role)
-      );
-
+      // ✅ NOUVEAU : Contrôle permissions avec RBAC moderne
+      const isAdmin = membership?.isAdmin || false;
+      
       // Admin peut tout faire
       if (!isAdmin) {
         if (expenseType === "aide_membre") {
@@ -60,11 +58,12 @@ class ExpenseRequestController {
             });
           }
         } else {
-          // Autres dépenses = bureau uniquement
-          if (!isBureau) {
+          // Autres dépenses = permission manage_expenses requise
+          if (!hasPermission(membership, "manage_expenses")) {
             return res.status(403).json({
-              error: "Seul le bureau peut enregistrer ce type de dépense",
-              code: "BUREAU_REQUIRED",
+              error: "Permission requise pour enregistrer ce type de dépense",
+              code: "INSUFFICIENT_PERMISSIONS",
+              required: "manage_expenses",
             });
           }
         }
@@ -206,28 +205,23 @@ class ExpenseRequestController {
       } = req.query;
 
       // ✅ AJOUTER CE MAPPING
-    const columnMapping = {
-  'createdAt': 'created_at',
-  'created_at': 'created_at',
-  'amountRequested': 'amount_requested', // ✅ Si la colonne DB est en snake_case
-  'urgencyLevel': 'urgency_level',       // ✅ Si la colonne DB est en snake_case
-  'status': 'status',
-  'approvedAt': 'approved_at'
-};
+      const columnMapping = {
+        'createdAt': 'created_at',
+        'created_at': 'created_at',
+        'amountRequested': 'amount_requested',
+        'urgencyLevel': 'urgency_level',
+        'status': 'status',
+        'approvedAt': 'approved_at'
+      };
 
-    const sortColumn = columnMapping[sortBy] || 'created_at';
+      const sortColumn = columnMapping[sortBy] || 'created_at';
 
-      // 🔐 CONTRÔLE ACCÈS SELON PERMISSIONS
-      const association = await Association.findByPk(associationId);
-      const permissionsMatrix = association.permissionsMatrix || {};
-
-      const userRoles = membership?.roles || [];
-      const isAdmin = userRoles.includes("admin_association");
-      const isBureau = userRoles.some((role) =>
-        ["president", "secretaire", "tresorier"].includes(role)
-      );
-      const canViewAll =
-        isAdmin || isBureau || req.user?.role === "super_admin";
+      // ✅ NOUVEAU : Contrôle accès avec RBAC moderne
+      const isAdmin = membership?.isAdmin || false;
+      const canViewAll = 
+        isAdmin || 
+        hasPermission(membership, "view_finances") ||
+        req.user?.role === "super_admin";
 
       // 🔍 CONSTRUCTION FILTRES
       let whereClause = {
@@ -309,7 +303,7 @@ class ExpenseRequestController {
       console.log("🔍 Debug getExpenseRequests:");
       console.log("   associationId:", associationId);
       console.log("   userId:", userId);
-      console.log("   userRoles:", userRoles);
+      console.log("   isAdmin:", isAdmin);
       console.log("   canViewAll:", canViewAll);
       console.log("   whereClause:", whereClause);
 
@@ -379,11 +373,6 @@ class ExpenseRequestController {
             as: "transaction",
             attributes: ["id", "amount", "status", "created_at"],
           },
-          // {
-          //   model: Document,
-          //   as: 'relatedDocuments',
-          //   attributes: ['id', 'type', 'name', 'url', 'uploadedAt']
-          // },
         ],
       });
 
@@ -394,17 +383,12 @@ class ExpenseRequestController {
         });
       }
 
-      // 🔐 CONTRÔLE ACCÈS
-      const association = await Association.findByPk(associationId);
-      const permissionsMatrix = association.permissionsMatrix || {};
-      const expensePermissions = permissionsMatrix.view_expense_requests || {
-        allowed_roles: ["bureau_central"],
-      };
-
-      const userRoles = membership?.roles || [];
-      const canViewAll = expensePermissions.allowed_roles.some((role) =>
-        userRoles.includes(role)
-      );
+      // ✅ NOUVEAU : Contrôle accès avec RBAC moderne
+      const canViewAll = 
+        membership?.isAdmin ||
+        hasPermission(membership, "view_finances") ||
+        req.user?.role === "super_admin";
+      
       const isRequester = expenseRequest.requesterId === userId;
       const isBeneficiary = expenseRequest.beneficiaryId === userId;
 
@@ -478,14 +462,14 @@ class ExpenseRequestController {
         });
       }
 
-      // 🔐 CONTRÔLE DROITS MODIFICATION
-      const userRoles = membership?.roles || [];
-      const isBureauMember = userRoles.some((role) =>
-        ["president", "tresorier", "secretaire"].includes(role)
-      );
+      // ✅ NOUVEAU : Contrôle droits modification avec RBAC moderne
+      const canManageExpenses = 
+        membership?.isAdmin ||
+        hasPermission(membership, "manage_expenses");
+      
       const isRequester = expenseRequest.requesterId === userId;
 
-      if (!isRequester && !isBureauMember) {
+      if (!isRequester && !canManageExpenses) {
         return res.status(403).json({
           error: "Droits insuffisants pour modifier cette demande",
           code: "INSUFFICIENT_RIGHTS",
@@ -585,14 +569,14 @@ class ExpenseRequestController {
         });
       }
 
-      // 🔐 CONTRÔLE DROITS ANNULATION
-      const userRoles = membership?.roles || [];
-      const isBureauMember = userRoles.some((role) =>
-        ["president", "tresorier", "secretaire"].includes(role)
-      );
+      // ✅ NOUVEAU : Contrôle droits annulation avec RBAC moderne
+      const canManageExpenses = 
+        membership?.isAdmin ||
+        hasPermission(membership, "manage_expenses");
+      
       const isRequester = expenseRequest.requesterId === userId;
 
-      if (!isRequester && !isBureauMember) {
+      if (!isRequester && !canManageExpenses) {
         return res.status(403).json({
           error: "Droits insuffisants pour annuler cette demande",
           code: "INSUFFICIENT_RIGHTS",
@@ -613,7 +597,7 @@ class ExpenseRequestController {
         {
           status: "cancelled",
           rejectionReason:
-            reason || `Annulée par ${isRequester ? "demandeur" : "bureau"}`,
+            reason || `Annulée par ${isRequester ? "demandeur" : "gestionnaire"}`,
           metadata: {
             ...expenseRequest.metadata,
             cancelledBy: userId,
@@ -640,113 +624,109 @@ class ExpenseRequestController {
   }
 
   /**
- * ✅ Approuver une demande de dépense
- * POST /api/v1/associations/:associationId/expense-requests/:requestId/approve
- */
-async approveExpenseRequest(req, res) {
-  try {
-    const { associationId, requestId } = req.params;
-    const { comment, amountApproved, conditions } = req.body;
+   * ✅ Approuver une demande de dépense
+   */
+  async approveExpenseRequest(req, res) {
+    try {
+      const { associationId, requestId } = req.params;
+      const { comment, amountApproved, conditions } = req.body;
 
-    const expenseRequest = await ExpenseRequest.findOne({
-      where: {
-        id: parseInt(requestId),
-        associationId: parseInt(associationId),
-        status: ['pending', 'under_review']
-      }
-    });
-
-    if (!expenseRequest) {
-      return res.status(404).json({
-        error: 'Demande non trouvée ou déjà traitée',
-        code: 'EXPENSE_REQUEST_NOT_FOUND'
-      });
-    }
-
-    // Vérifier permissions
-    const membership = req.membership;
-    const userRoles = membership?.roles || [];
-    const canApprove = 
-      userRoles.includes('admin_association') ||
-      userRoles.includes('president') ||
-      userRoles.includes('tresorier') ||
-      userRoles.includes('secretaire') ||
-      req.user.role === 'super_admin';
-
-    if (!canApprove) {
-      return res.status(403).json({
-        error: 'Permissions insuffisantes',
-        code: 'INSUFFICIENT_PERMISSIONS'
-      });
-    }
-
-    // Vérifier si déjà validé
-    const existingValidation = expenseRequest.validationHistory?.find(
-      v => v.userId === req.user.id
-    );
-
-    if (existingValidation) {
-      return res.status(400).json({
-        error: 'Vous avez déjà validé cette demande',
-        code: 'ALREADY_VALIDATED'
-      });
-    }
-
-    // Ajouter validation
-    const validationHistory = expenseRequest.validationHistory || [];
-    validationHistory.push({
-      userId: req.user.id,
-      role: userRoles[0] || 'member',
-      decision: 'approved',
-      comment: comment || '',
-      timestamp: new Date().toISOString(),
-      user: {
-        firstName: req.user.firstName,
-        lastName: req.user.lastName
-      }
-    });
-
-    // Déterminer statut
-    const requiredValidators = expenseRequest.requiredValidators || ['president', 'tresorier'];
-    const approvedCount = validationHistory.filter(v => v.decision === 'approved').length;
-    
-    let newStatus = 'under_review';
-    if (approvedCount >= requiredValidators.length) {
-      newStatus = 'approved';
-    }
-
-    await expenseRequest.update({
-      status: newStatus,
-      validationHistory,
-      amountApproved: amountApproved || expenseRequest.amountRequested,
-      approvalConditions: conditions || null,
-      approvedAt: newStatus === 'approved' ? new Date() : null
-    });
-
-    res.json({
-      success: true,
-      message: newStatus === 'approved' ? 'Demande approuvée' : 'Validation enregistrée',
-      data: {
-        expenseRequest,
-        validationProgress: {
-          completed: approvedCount,
-          total: requiredValidators.length,
-          percentage: Math.round((approvedCount / requiredValidators.length) * 100)
+      const expenseRequest = await ExpenseRequest.findOne({
+        where: {
+          id: parseInt(requestId),
+          associationId: parseInt(associationId),
+          status: ['pending', 'under_review']
         }
+      });
+
+      if (!expenseRequest) {
+        return res.status(404).json({
+          error: 'Demande non trouvée ou déjà traitée',
+          code: 'EXPENSE_REQUEST_NOT_FOUND'
+        });
       }
-    });
-  } catch (error) {
-    console.error('Erreur approbation:', error);
-    res.status(500).json({
-      error: 'Erreur lors de l\'approbation',
-      code: 'APPROVAL_ERROR'
-    });
+
+      // ✅ NOUVEAU : Vérifier permissions avec RBAC moderne
+      const membership = req.membership;
+      const canApprove = 
+        membership?.isAdmin ||
+        hasPermission(membership, "validate_expenses") ||
+        req.user.role === 'super_admin';
+
+      if (!canApprove) {
+        return res.status(403).json({
+          error: 'Permissions insuffisantes',
+          code: 'INSUFFICIENT_PERMISSIONS',
+          required: 'validate_expenses'
+        });
+      }
+
+      // Vérifier si déjà validé
+      const existingValidation = expenseRequest.validationHistory?.find(
+        v => v.userId === req.user.id
+      );
+
+      if (existingValidation) {
+        return res.status(400).json({
+          error: 'Vous avez déjà validé cette demande',
+          code: 'ALREADY_VALIDATED'
+        });
+      }
+
+      // Ajouter validation
+      const validationHistory = expenseRequest.validationHistory || [];
+      validationHistory.push({
+        userId: req.user.id,
+        role: membership?.assignedRoles?.[0] || 'member',
+        decision: 'approved',
+        comment: comment || '',
+        timestamp: new Date().toISOString(),
+        user: {
+          firstName: req.user.firstName,
+          lastName: req.user.lastName
+        }
+      });
+
+      // Déterminer statut
+      const requiredValidators = expenseRequest.requiredValidators || ['president', 'tresorier'];
+      const approvedCount = validationHistory.filter(v => v.decision === 'approved').length;
+      
+      let newStatus = 'under_review';
+      if (approvedCount >= requiredValidators.length) {
+        newStatus = 'approved';
+      }
+
+      await expenseRequest.update({
+        status: newStatus,
+        validationHistory,
+        amountApproved: amountApproved || expenseRequest.amountRequested,
+        approvalConditions: conditions || null,
+        approvedAt: newStatus === 'approved' ? new Date() : null
+      });
+
+      res.json({
+        success: true,
+        message: newStatus === 'approved' ? 'Demande approuvée' : 'Validation enregistrée',
+        data: {
+          expenseRequest,
+          validationProgress: {
+            completed: approvedCount,
+            total: requiredValidators.length,
+            percentage: Math.round((approvedCount / requiredValidators.length) * 100)
+          }
+        }
+      });
+    } catch (error) {
+      console.error('Erreur approbation:', error);
+      res.status(500).json({
+        error: 'Erreur lors de l\'approbation',
+        code: 'APPROVAL_ERROR'
+      });
+    }
   }
-}
 
   /**
    * ⏳ Demandes en attente de validation
-   * GET /api/v1/associations/:associationId/expense-requests/pending-validations
    */
   async getPendingValidations(req, res) {
     try {
@@ -840,101 +820,101 @@ async approveExpenseRequest(req, res) {
   }
 
   async processPayment(req, res) {
-  try {
-    const { associationId, requestId } = req.params;
-    const {
-      paymentMode = 'manual',
-      paymentMethod,
-      paymentDate,
-      manualPaymentReference,
-      manualPaymentDetails,
-      notes
-    } = req.body;
-
-    // Vérifier que la demande existe et est approuvée
-    const expenseRequest = await ExpenseRequest.findOne({
-      where: {
-        id: parseInt(requestId),
-        associationId: parseInt(associationId),
-        status: 'approved'
-      }
-    });
-
-    if (!expenseRequest) {
-      return res.status(404).json({
-        error: 'Demande non trouvée ou non approuvée',
-        code: 'EXPENSE_REQUEST_NOT_FOUND'
-      });
-    }
-
-    // Vérifier permissions (trésorier ou admin_association)
-    const membership = req.membership;
-    const userRoles = membership?.roles || [];
-    const canPay = 
-      userRoles.includes('admin_association') ||
-      userRoles.includes('tresorier') ||
-      req.user.role === 'super_admin';
-
-    if (!canPay) {
-      return res.status(403).json({
-        error: 'Seul le trésorier ou admin peut confirmer les paiements',
-        code: 'INSUFFICIENT_PERMISSIONS'
-      });
-    }
-
-    // Créer la transaction
-    const transaction = await Transaction.create({
-      associationId: parseInt(associationId),
-      userId: expenseRequest.beneficiaryId || null,
-      type: expenseRequest.isLoan ? 'pret' : 'aide',
-      amount: parseFloat(expenseRequest.amountApproved || expenseRequest.amountRequested),
-      currency: expenseRequest.currency,
-      status: 'completed',
-      paymentMode,
-      paymentMethod,
-      manualPaymentReference,
-      manualPaymentDetails,
-      metadata: {
-        expenseRequestId: expenseRequest.id,
-        processedBy: req.user.id,
-        processedAt: new Date().toISOString(),
+    try {
+      const { associationId, requestId } = req.params;
+      const {
+        paymentMode = 'manual',
+        paymentMethod,
+        paymentDate,
+        manualPaymentReference,
+        manualPaymentDetails,
         notes
-      }
-    });
+      } = req.body;
 
-    // Mettre à jour le statut de la demande
-    await expenseRequest.update({
-      status: 'paid',
-      transactionId: transaction.id,
-      paidAt: new Date(paymentDate || new Date()),
-      paymentValidator: req.user.id
-    });
-
-    res.json({
-      success: true,
-      message: 'Paiement confirmé avec succès',
-      data: {
-        expenseRequest: {
-          id: expenseRequest.id,
-          status: 'paid',
-          paidAt: expenseRequest.paidAt
-        },
-        transaction: {
-          id: transaction.id,
-          amount: transaction.amount,
-          reference: manualPaymentReference
+      // Vérifier que la demande existe et est approuvée
+      const expenseRequest = await ExpenseRequest.findOne({
+        where: {
+          id: parseInt(requestId),
+          associationId: parseInt(associationId),
+          status: 'approved'
         }
+      });
+
+      if (!expenseRequest) {
+        return res.status(404).json({
+          error: 'Demande non trouvée ou non approuvée',
+          code: 'EXPENSE_REQUEST_NOT_FOUND'
+        });
       }
-    });
-  } catch (error) {
-    console.error('Erreur confirmation paiement:', error);
-    res.status(500).json({
-      error: 'Erreur lors de la confirmation du paiement',
-      code: 'PAYMENT_PROCESS_ERROR',
-      details: error.message
-    });
+
+      // ✅ NOUVEAU : Vérifier permissions avec RBAC moderne
+      const membership = req.membership;
+      const canPay = 
+        membership?.isAdmin ||
+        hasPermission(membership, "validate_expenses") ||
+        req.user.role === 'super_admin';
+
+      if (!canPay) {
+        return res.status(403).json({
+          error: 'Permissions insuffisantes pour confirmer les paiements',
+          code: 'INSUFFICIENT_PERMISSIONS',
+          required: 'validate_expenses'
+        });
+      }
+
+      // Créer la transaction
+      const transaction = await Transaction.create({
+        associationId: parseInt(associationId),
+        userId: expenseRequest.beneficiaryId || null,
+        type: expenseRequest.isLoan ? 'pret' : 'aide',
+        amount: parseFloat(expenseRequest.amountApproved || expenseRequest.amountRequested),
+        currency: expenseRequest.currency,
+        status: 'completed',
+        paymentMode,
+        paymentMethod,
+        manualPaymentReference,
+        manualPaymentDetails,
+        metadata: {
+          expenseRequestId: expenseRequest.id,
+          processedBy: req.user.id,
+          processedAt: new Date().toISOString(),
+          notes
+        }
+      });
+
+      // Mettre à jour le statut de la demande
+      await expenseRequest.update({
+        status: 'paid',
+        transactionId: transaction.id,
+        paidAt: new Date(paymentDate || new Date()),
+        paymentValidator: req.user.id
+      });
+
+      res.json({
+        success: true,
+        message: 'Paiement confirmé avec succès',
+        data: {
+          expenseRequest: {
+            id: expenseRequest.id,
+            status: 'paid',
+            paidAt: expenseRequest.paidAt
+          },
+          transaction: {
+            id: transaction.id,
+            amount: transaction.amount,
+            reference: manualPaymentReference
+          }
+        }
+      });
+    } catch (error) {
+      console.error('Erreur confirmation paiement:', error);
+      res.status(500).json({
+        error: 'Erreur lors de la confirmation du paiement',
+        code: 'PAYMENT_PROCESS_ERROR',
+        details: error.message
+      });
+    }
   }
-}
 
   /**
    * 🔄 Lister remboursements prêt
@@ -1040,7 +1020,7 @@ async approveExpenseRequest(req, res) {
           id: parseInt(requestId),
           associationId: parseInt(associationId),
           isLoan: true,
-          status: ["approved", "paid"], // Seulement les prêts actifs
+          status: ["approved", "paid"],
         },
       });
 
@@ -1083,7 +1063,7 @@ async approveExpenseRequest(req, res) {
       const repayment = await LoanRepayment.create({
         expenseRequestId: parseInt(requestId),
         amount: parseFloat(amount),
-        principalAmount: parseFloat(amount), // Pour l'instant, pas d'intérêts
+        principalAmount: parseFloat(amount),
         interestAmount: 0,
         penaltyAmount: 0,
         currency: loan.currency,
@@ -1096,7 +1076,7 @@ async approveExpenseRequest(req, res) {
           recordedAt: new Date(),
         },
         notes,
-        status: "pending", // Nécessite validation
+        status: "pending",
         installmentNumber: existingRepayments.length + 1,
       });
 
@@ -1147,7 +1127,6 @@ async approveExpenseRequest(req, res) {
    */
   async getExpenseStatistics(req, res) {
     try {
-      // TODO: Implémenter statistiques
       res.status(501).json({
         error: "Fonctionnalité en cours de développement",
         code: "NOT_IMPLEMENTED",
@@ -1161,7 +1140,6 @@ async approveExpenseRequest(req, res) {
   /**
    * 📈 Résumé financier complet d'une association
    */
-
   async getFinancialSummary(req, res) {
     try {
       const associationId = parseInt(req.params.associationId);
@@ -1185,14 +1163,7 @@ async approveExpenseRequest(req, res) {
         });
       }
 
-      // Récupérer membership
-      const {
-        AssociationMember,
-        Association,
-        Section,
-        User,
-      } = require("../../../models");
-
+      // Récupérer membership avec association pour RBAC
       const membership = await AssociationMember.findOne({
         where: {
           userId: parseInt(req.user.id),
@@ -1203,11 +1174,10 @@ async approveExpenseRequest(req, res) {
           {
             model: Association,
             as: "association",
-            // ✅ COLONNES RÉELLES SEULEMENT
             attributes: [
               "id",
               "name",
-              "permissionsMatrix",
+              "rolesConfiguration", // ✅ Charger config RBAC
               "domiciliationCountry",
             ],
           },
@@ -1221,56 +1191,29 @@ async approveExpenseRequest(req, res) {
         });
       }
 
-      const userRoles = membership.roles || [];
       const association = membership.association;
-
-      console.log("   User roles:", userRoles);
       console.log("   Association:", association.name);
 
-      // 🔥 VÉRIFICATION PERMISSIONS avec admin_association PRIORITAIRE
-      let hasFinanceAccess = false;
+      // ✅ NOUVEAU : Vérification permissions avec RBAC moderne
+      const hasFinanceAccess =
+        membership.isAdmin ||
+        hasPermission(membership, "view_finances") ||
+        req.user?.role === "super_admin";
 
-      if (userRoles.includes("admin_association")) {
-        console.log("   ✅ admin_association - Accès total accordé");
-        hasFinanceAccess = true;
-      } else if (req.user?.role === "super_admin") {
-        console.log("   ✅ super_admin - Accès total accordé");
-        hasFinanceAccess = true;
-      } else {
-        const permissionsMatrix = association.permissionsMatrix || {};
-        const financePermissions = permissionsMatrix.view_finances || {
-          allowed_roles: ["president", "tresorier", "secretaire"],
-        };
-
-        if (!financePermissions.allowed_roles.includes("admin_association")) {
-          financePermissions.allowed_roles.unshift("admin_association");
-        }
-
-        hasFinanceAccess = financePermissions.allowed_roles.some((role) =>
-          userRoles.includes(role)
-        );
-
-        console.log(
-          "   Rôles autorisés finances:",
-          financePermissions.allowed_roles
-        );
-        console.log("   Accès finance accordé:", hasFinanceAccess);
-      }
+      console.log("   isAdmin:", membership.isAdmin);
+      console.log("   hasFinanceAccess:", hasFinanceAccess);
 
       if (!hasFinanceAccess) {
         return res.status(403).json({
           error: "Permissions insuffisantes pour voir les finances",
           code: "INSUFFICIENT_PERMISSIONS",
-          userRoles: userRoles,
-          message:
-            "admin_association, president, tresorier ou secrétaire requis",
+          required: "view_finances",
         });
       }
 
       // 📊 Calculer le résumé financier
       console.log("   📊 Calcul résumé financier...");
 
-      // ✅ VERSION SIMPLIFIÉE sans service externe pour éviter erreurs
       let financialSummary;
       try {
         // Calculer balance de base directement
@@ -1301,7 +1244,7 @@ async approveExpenseRequest(req, res) {
 
         const totalIncome = parseFloat(totalIncomeResult?.total || 0);
 
-        // Total dépenses (aides pour l'instant)
+        // Total dépenses
         const totalExpensesResult = await Transaction.findOne({
           where: {
             associationId,
@@ -1330,13 +1273,13 @@ async approveExpenseRequest(req, res) {
           currentBalance: {
             totalIncome,
             totalExpenses,
-            outstandingLoans: 0, // Pour plus tard
+            outstandingLoans: 0,
             availableBalance: totalIncome - totalExpenses,
           },
           projectedBalance: totalIncome - totalExpenses,
-          pendingExpenses: 0, // Pour plus tard
-          upcomingRepayments: 0, // Pour plus tard
-          expensesByType: [], // Pour plus tard
+          pendingExpenses: 0,
+          upcomingRepayments: 0,
+          expensesByType: [],
           lastCalculated: new Date(),
         };
       } catch (balanceError) {
@@ -1379,13 +1322,11 @@ async approveExpenseRequest(req, res) {
       // 📈 Historique simplifié
       let balanceHistory = [];
       if (includeHistory) {
-        // Pour plus tard, structure vide pour l'instant
         balanceHistory = [];
       }
 
-      // 🏛️ Informations association avec VRAIES colonnes
+      // 🏛️ Informations association
       const associationInfo = await Association.findByPk(associationId, {
-        // ✅ COLONNES RÉELLES SEULEMENT
         attributes: ["id", "name", "domiciliationCountry", "created_at"],
         include: [
           {
@@ -1407,14 +1348,12 @@ async approveExpenseRequest(req, res) {
       };
 
       try {
-        // Stats membres de base
         const totalMembers = await AssociationMember.count({
           where: { associationId, status: "active" },
         });
 
         memberStats = { total: totalMembers, byType: [], byStatus: [] };
 
-        // Stats cotisations de base
         const cotisationCount = await Transaction.count({
           where: {
             associationId,
@@ -1434,14 +1373,13 @@ async approveExpenseRequest(req, res) {
         console.error("   ⚠️ Erreur stats:", statsError.message);
       }
 
-      // 📋 Construire la réponse finale avec VRAIES données
+      // 📋 Construire la réponse finale
       const response = {
         association: {
           id: associationInfo.id,
           name: associationInfo.name,
-          // ✅ UTILISER domiciliationCountry au lieu de currency
           country: associationInfo.domiciliationCountry || "FR",
-          currency: "EUR", // Hardcodé pour l'instant
+          currency: "EUR",
           createdAt: associationInfo.createdAt,
           sectionsCount: associationInfo.sections?.length || 0,
         },
@@ -1478,14 +1416,9 @@ async approveExpenseRequest(req, res) {
           period,
           includeProjections,
           generatedAt: new Date(),
-          userRole: userRoles,
-          hasFullAccess:
-            userRoles.includes("admin_association") ||
-            userRoles.includes("president") ||
-            userRoles.includes("tresorier"),
-          accessLevel: userRoles.includes("admin_association")
-            ? "admin"
-            : "standard",
+          isAdmin: membership.isAdmin,
+          hasFullAccess: hasFinanceAccess,
+          accessLevel: membership.isAdmin ? "admin" : "standard",
         },
       };
 
@@ -1511,10 +1444,8 @@ async approveExpenseRequest(req, res) {
   }
 
   // Méthodes utilitaires pour le résumé financier
-
   async getMembershipStats(associationId) {
     try {
-      // Validation entrée
       const id = parseInt(associationId);
       if (isNaN(id)) {
         throw new Error(`Association ID invalide: ${associationId}`);
@@ -1581,7 +1512,6 @@ async approveExpenseRequest(req, res) {
 
   async getCotisationStats(associationId, period) {
     try {
-      // Validation entrée
       const id = parseInt(associationId);
       if (isNaN(id)) {
         throw new Error(`Association ID invalide: ${associationId}`);
@@ -1593,7 +1523,6 @@ async approveExpenseRequest(req, res) {
         status: "completed",
       };
 
-      // Filtre période avec validation
       if (period && period !== "all") {
         const periodMap = {
           month: 30,
@@ -1660,7 +1589,7 @@ async approveExpenseRequest(req, res) {
         totalGross: parseFloat(cotisationSummary?.totalGross || 0),
         totalNet: parseFloat(cotisationSummary?.totalNet || 0),
         totalCommissions: parseFloat(cotisationSummary?.totalCommissions || 0),
-        currentMonthCollectionRate: 0, // Calculé séparément si nécessaire
+        currentMonthCollectionRate: 0,
         expectedThisMonth: 0,
         actualThisMonth: 0,
       };
@@ -1681,14 +1610,11 @@ async approveExpenseRequest(req, res) {
 
   async getUpcomingFinancialEvents(associationId) {
     try {
-      // Validation entrée
       const id = parseInt(associationId);
       if (isNaN(id)) {
         throw new Error(`Association ID invalide: ${associationId}`);
       }
 
-      // Pour l'instant, retourner structure vide
-      // Implémentation complète quand ExpenseRequest et LoanRepayment seront en place
       return {
         upcomingRepayments: [],
         urgentExpenses: [],
@@ -1709,7 +1635,6 @@ async approveExpenseRequest(req, res) {
    */
   async exportExpenseData(req, res) {
     try {
-      // TODO: Implémenter export
       res.status(501).json({
         error: "Fonctionnalité en cours de développement",
         code: "NOT_IMPLEMENTED",
@@ -1722,7 +1647,6 @@ async approveExpenseRequest(req, res) {
 
   /**
    * ❌ Refuser une demande
-   * POST /api/v1/associations/:associationId/expense-requests/:requestId/reject
    */
   async rejectExpenseRequest(req, res) {
     try {
@@ -1751,26 +1675,25 @@ async approveExpenseRequest(req, res) {
         });
       }
 
+      // ✅ NOUVEAU : Vérifier permissions avec RBAC moderne
       const membership = req.membership;
-      const userRoles = membership?.roles || [];
       const canReject =
-        userRoles.includes("admin_association") ||
-        userRoles.includes("president") ||
-        userRoles.includes("tresorier") ||
-        userRoles.includes("secretaire") ||
+        membership?.isAdmin ||
+        hasPermission(membership, "validate_expenses") ||
         req.user.role === "super_admin";
 
       if (!canReject) {
         return res.status(403).json({
           error: "Permissions insuffisantes",
           code: "INSUFFICIENT_PERMISSIONS",
+          required: "validate_expenses",
         });
       }
 
       const validationHistory = expenseRequest.validationHistory || [];
       validationHistory.push({
         userId: req.user.id,
-        role: userRoles[0] || "member",
+        role: membership?.assignedRoles?.[0] || "member",
         decision: "rejected",
         comment: rejectionReason.trim(),
         timestamp: new Date().toISOString(),
@@ -1803,7 +1726,6 @@ async approveExpenseRequest(req, res) {
 
   /**
    * 💬 Demander infos complémentaires
-   * POST /api/v1/associations/:associationId/expense-requests/:requestId/request-info
    */
   async requestAdditionalInfo(req, res) {
     try {
@@ -1835,7 +1757,7 @@ async approveExpenseRequest(req, res) {
       const validationHistory = expenseRequest.validationHistory || [];
       validationHistory.push({
         userId: req.user.id,
-        role: req.membership?.roles?.[0] || "member",
+        role: req.membership?.assignedRoles?.[0] || "member",
         decision: "info_needed",
         comment: requestedInfo.trim(),
         timestamp: new Date().toISOString(),
@@ -1864,8 +1786,6 @@ async approveExpenseRequest(req, res) {
       });
     }
   }
-
-
 }
 
 module.exports = new ExpenseRequestController();

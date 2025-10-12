@@ -1,3 +1,4 @@
+//src\modules\associations\controllers\sectionController.js
 const {
   Association,
   Section,
@@ -7,12 +8,14 @@ const {
 } = require("../../../models");
 const { Op } = require("sequelize");
 
+// ✅ NOUVEAU : Import système RBAC moderne
+const { hasPermission, getEffectivePermissions } = require('../../../core/middleware/checkPermission');
+
 // Ajouter cette fonction AVANT la classe SectionController
 async function updateMemberRoles(associationId, sectionId, newBureau) {
   try {
     console.log('Mise à jour des rôles membres...');
     
-    // Récupérer tous les membres de la section
     const members = await AssociationMember.findAll({
       where: { associationId, sectionId }
     });
@@ -23,7 +26,6 @@ async function updateMemberRoles(associationId, sectionId, newBureau) {
     for (const member of members) {
       let roles = member.roles || [];
       
-      // Retirer les anciens rôles section
       const oldRolesCount = roles.length;
       roles = roles.filter(role => 
         !['responsable_section', 'secretaire_section', 'tresorier_section'].includes(role)
@@ -90,27 +92,33 @@ class SectionController {
         bureauSection,
       } = req.body;
 
-      // Vérifier que l'association existe et que l'utilisateur a les droits
+      // Vérifier que l'association existe et permissions
       const membership = await AssociationMember.findOne({
         where: {
           userId: req.user.id,
           associationId,
           status: "active",
         },
-        include: [{ model: Association, as: "association" }],
+        include: [
+          { 
+            model: Association, 
+            as: "association",
+            attributes: ['rolesConfiguration']
+          }
+        ],
       });
 
+      // ✅ NOUVEAU : Vérifier permissions avec RBAC moderne
       const canCreateSection =
-        membership &&
-        (["admin_association", "central_board"].includes(
-          membership.roles?.[0]
-        ) ||
-          req.user.role === "super_admin");
+        membership?.isAdmin ||
+        hasPermission(membership, "manage_sections") ||
+        req.user.role === "super_admin";
 
       if (!canCreateSection) {
         return res.status(403).json({
-          error: "Seul l'admin ou le bureau central peut créer une section",
-          code: "ADMIN_OR_CENTRAL_BOARD_ONLY",
+          error: "Permissions insuffisantes pour créer une section",
+          code: "INSUFFICIENT_PERMISSIONS",
+          required: "manage_sections",
         });
       }
 
@@ -262,6 +270,13 @@ class SectionController {
             associationId,
             status: "active",
           },
+          include: [
+            {
+              model: Association,
+              as: "association",
+              attributes: ['rolesConfiguration']
+            }
+          ]
         }),
         AssociationMember.findOne({
           where: {
@@ -270,24 +285,28 @@ class SectionController {
             sectionId,
             status: "active",
           },
+          include: [
+            {
+              model: Association,
+              as: "association",
+              attributes: ['rolesConfiguration']
+            }
+          ]
         }),
       ]);
 
+      // ✅ NOUVEAU : Vérifier permissions avec RBAC moderne
       const canModify =
-        (centralMembership &&
-          ["president", "central_board"].includes(
-            centralMembership.roles?.[0]
-          )) ||
-        (sectionMembership &&
-          ["responsable_section", "secretaire_section"].includes(
-            sectionMembership.roles?.[0]
-          )) ||
+        centralMembership?.isAdmin ||
+        hasPermission(centralMembership, "manage_sections") ||
+        hasPermission(sectionMembership, "manage_section") ||
         req.user.role === "super_admin";
 
       if (!canModify) {
         return res.status(403).json({
           error: "Permissions insuffisantes pour modifier la section",
           code: "INSUFFICIENT_SECTION_PERMISSIONS",
+          required: "manage_sections",
         });
       }
 
@@ -322,76 +341,84 @@ class SectionController {
   }
 
   // 👥 ASSIGNER BUREAU SECTION
-   async updateBureauSection(req, res) {
-  try {
-    const { associationId, sectionId } = req.params;
-    const { bureauSection } = req.body; // ✅ Récupérer bureauSection depuis le body
+  async updateBureauSection(req, res) {
+    try {
+      const { associationId, sectionId } = req.params;
+      const { bureauSection } = req.body;
 
-    console.log('Données reçues:', { bureauSection }); // Debug
+      console.log('Données reçues:', { bureauSection });
 
-    // Vérifier permissions
-    const membership = await AssociationMember.findOne({
-      where: {
-        userId: req.user.id,
-        associationId,
-        status: "active",
-      },
-    });
-
-    const userRoles = membership?.roles || [];
-    const canManageBureau =
-      userRoles.includes("admin_association") ||
-      userRoles.includes("president") ||
-      req.user.role === "super_admin";
-
-    if (!canManageBureau) {
-      return res.status(403).json({
-        error: "Seul le bureau central peut gérer le bureau section",
-        code: "CENTRAL_BOARD_ONLY",
+      // Vérifier permissions
+      const membership = await AssociationMember.findOne({
+        where: {
+          userId: req.user.id,
+          associationId,
+          status: "active",
+        },
+        include: [
+          {
+            model: Association,
+            as: "association",
+            attributes: ['rolesConfiguration']
+          }
+        ]
       });
-    }
 
-    // Récupérer la section
-    const section = await Section.findOne({
-      where: { id: sectionId, associationId }
-    });
+      // ✅ NOUVEAU : Vérifier permissions avec RBAC moderne
+      const canManageBureau =
+        membership?.isAdmin ||
+        hasPermission(membership, "manage_sections") ||
+        req.user.role === "super_admin";
 
-    if (!section) {
-      return res.status(404).json({
-        error: "Section introuvable",
-        code: "SECTION_NOT_FOUND",
-      });
-    }
-
-    // Mettre à jour le bureau section
-    await section.update({
-      bureauSection: {
-        ...bureauSection,
-        updatedAt: new Date(),
-        updatedBy: req.user.id
+      if (!canManageBureau) {
+        return res.status(403).json({
+          error: "Permissions insuffisantes pour gérer le bureau section",
+          code: "INSUFFICIENT_PERMISSIONS",
+          required: "manage_sections",
+        });
       }
-    });
 
-    // Récupérer la section mise à jour
-    const updatedSection = await Section.findByPk(sectionId);
+      // Récupérer la section
+      const section = await Section.findOne({
+        where: { id: sectionId, associationId }
+      });
 
-    res.json({
-      success: true,
-      message: "Bureau section mis à jour avec succès",
-      data: { 
-        bureau: updatedSection.bureauSection 
-      },
-    });
+      if (!section) {
+        return res.status(404).json({
+          error: "Section introuvable",
+          code: "SECTION_NOT_FOUND",
+        });
+      }
 
-  } catch (error) {
-    console.error("Erreur mise à jour bureau section:", error);
-    res.status(500).json({
-      error: "Erreur mise à jour bureau section",
-      code: "BUREAU_UPDATE_ERROR",
-      details: error.message,
-    });
+      // Mettre à jour le bureau section
+      await section.update({
+        bureauSection: {
+          ...bureauSection,
+          updatedAt: new Date(),
+          updatedBy: req.user.id
+        }
+      });
+
+      // Récupérer la section mise à jour
+      const updatedSection = await Section.findByPk(sectionId);
+
+      res.json({
+        success: true,
+        message: "Bureau section mis à jour avec succès",
+        data: { 
+          bureau: updatedSection.bureauSection 
+        },
+      });
+
+    } catch (error) {
+      console.error("Erreur mise à jour bureau section:", error);
+      res.status(500).json({
+        error: "Erreur mise à jour bureau section",
+        code: "BUREAU_UPDATE_ERROR",
+        details: error.message,
+      });
+    }
   }
-}
 
   // 📊 STATISTIQUES SECTION
   async getSectionStats(req, res) {
@@ -498,23 +525,33 @@ class SectionController {
     try {
       const { associationId, sectionId } = req.params;
 
-      // Vérifier permissions (président uniquement)
+      // Vérifier permissions
       const membership = await AssociationMember.findOne({
         where: {
           userId: req.user.id,
           associationId,
           status: "active",
         },
+        include: [
+          {
+            model: Association,
+            as: "association",
+            attributes: ['rolesConfiguration']
+          }
+        ]
       });
 
+      // ✅ NOUVEAU : Vérifier permissions avec RBAC moderne
       const canDelete =
-        (membership && membership.roles?.includes("president")) ||
+        membership?.isAdmin ||
+        hasPermission(membership, "manage_sections") ||
         req.user.role === "super_admin";
 
       if (!canDelete) {
         return res.status(403).json({
-          error: "Seul le président peut supprimer une section",
-          code: "PRESIDENT_ONLY_DELETE",
+          error: "Permissions insuffisantes pour supprimer une section",
+          code: "INSUFFICIENT_PERMISSIONS",
+          required: "manage_sections",
         });
       }
 
@@ -583,19 +620,26 @@ class SectionController {
           associationId,
           status: "active",
         },
+        include: [
+          {
+            model: Association,
+            as: "association",
+            attributes: ['rolesConfiguration']
+          }
+        ]
       });
 
+      // ✅ NOUVEAU : Vérifier permissions avec RBAC moderne
       const canTransfer =
-        membership &&
-        (["president", "central_board", "responsable_section"].includes(
-          membership.roles?.[0]
-        ) ||
-          req.user.role === "super_admin");
+        membership?.isAdmin ||
+        hasPermission(membership, "manage_members") ||
+        req.user.role === "super_admin";
 
       if (!canTransfer) {
         return res.status(403).json({
           error: "Permissions insuffisantes pour transférer un membre",
           code: "INSUFFICIENT_TRANSFER_PERMISSIONS",
+          required: "manage_members",
         });
       }
 
@@ -680,8 +724,6 @@ class SectionController {
   }
 
   // 🔧 UTILITAIRES PRIVÉES
-
-  // Assigner membres aux rôles bureau section
   async assignBureauSection(sectionId, bureauSection) {
     try {
       const roles = ["responsable", "secretaire", "tresorier"];
@@ -689,7 +731,6 @@ class SectionController {
       for (const role of roles) {
         const assignment = bureauSection[role];
         if (assignment && assignment.userId) {
-          // Mettre à jour le membre avec le nouveau rôle
           await AssociationMember.update(
             {
               roles: [role + "_section"],
@@ -710,33 +751,38 @@ class SectionController {
     }
   }
 
-  
-
   // 📊 RAPPORT COMPARATIF SECTIONS
   async getSectionsComparison(req, res) {
     try {
       const { associationId } = req.params;
 
-      // Vérifier accès (bureau central uniquement)
+      // Vérifier accès (bureau central)
       const membership = await AssociationMember.findOne({
         where: {
           userId: req.user.id,
           associationId,
           status: "active",
         },
+        include: [
+          {
+            model: Association,
+            as: "association",
+            attributes: ['rolesConfiguration']
+          }
+        ]
       });
 
+      // ✅ NOUVEAU : Vérifier permissions avec RBAC moderne
       const canView =
-        (membership &&
-          ["president", "central_board", "tresorier"].includes(
-            membership.roles?.[0]
-          )) ||
+        membership?.isAdmin ||
+        hasPermission(membership, "view_finances") ||
         req.user.role === "super_admin";
 
       if (!canView) {
         return res.status(403).json({
-          error: "Accès réservé au bureau central",
-          code: "CENTRAL_BOARD_ONLY",
+          error: "Permissions insuffisantes pour voir les rapports",
+          code: "INSUFFICIENT_PERMISSIONS",
+          required: "view_finances",
         });
       }
 
@@ -810,122 +856,119 @@ class SectionController {
     }
   }
 
- async getSectionDetails(req, res) {
-  try {
-    const { associationId, sectionId } = req.params;
+  async getSectionDetails(req, res) {
+    try {
+      const { associationId, sectionId } = req.params;
 
-    // Vérifier accès association
-    const membership = await AssociationMember.findOne({
-      where: {
-        userId: req.user.id,
-        associationId,
-        status: 'active'
-      }
-    });
-
-    if (!membership && req.user.role !== 'super_admin') {
-      return res.status(403).json({
-        error: 'Accès association non autorisé',
-        code: 'ASSOCIATION_ACCESS_DENIED'
-      });
-    }
-
-    // Récupérer la section avec statistiques
-    const section = await Section.findOne({
-      where: { 
-        id: sectionId,
-        associationId 
-      },
-      include: [
-        {
-          model: Association,
-          as: 'association',
-          attributes: ['id', 'name', 'isMultiSection']
-        }
-      ]
-    });
-
-    if (!section) {
-      return res.status(404).json({
-        error: 'Section introuvable',
-        code: 'SECTION_NOT_FOUND'
-      });
-    }
-
-    // Calculer statistiques section
-    const [membersCount, activeMembers, pendingMembers] = await Promise.all([
-      AssociationMember.count({
-        where: { 
+      // Vérifier accès association
+      const membership = await AssociationMember.findOne({
+        where: {
+          userId: req.user.id,
           associationId,
-          sectionId: section.id 
-        }
-      }),
-      AssociationMember.count({
-        where: { 
-          associationId,
-          sectionId: section.id,
           status: 'active'
         }
-      }),
-      AssociationMember.count({
+      });
+
+      if (!membership && req.user.role !== 'super_admin') {
+        return res.status(403).json({
+          error: 'Accès association non autorisé',
+          code: 'ASSOCIATION_ACCESS_DENIED'
+        });
+      }
+
+      // Récupérer la section avec statistiques
+      const section = await Section.findOne({
         where: { 
-          associationId,
-          sectionId: section.id,
-          status: 'pending'
+          id: sectionId,
+          associationId 
+        },
+        include: [
+          {
+            model: Association,
+            as: 'association',
+            attributes: ['id', 'name', 'isMultiSection']
+          }
+        ]
+      });
+
+      if (!section) {
+        return res.status(404).json({
+          error: 'Section introuvable',
+          code: 'SECTION_NOT_FOUND'
+        });
+      }
+
+      // Calculer statistiques section
+      const [membersCount, activeMembers, pendingMembers] = await Promise.all([
+        AssociationMember.count({
+          where: { 
+            associationId,
+            sectionId: section.id 
+          }
+        }),
+        AssociationMember.count({
+          where: { 
+            associationId,
+            sectionId: section.id,
+            status: 'active'
+          }
+        }),
+        AssociationMember.count({
+          where: { 
+            associationId,
+            sectionId: section.id,
+            status: 'pending'
+          }
+        })
+      ]);
+
+      // Calculer revenus mensuels (estimation)
+      const association = await Association.findByPk(associationId);
+      const memberTypes = association?.memberTypes || {};
+      
+      let monthlyRevenue = 0;
+      if (Object.keys(memberTypes).length > 0) {
+        const averageCotisation = Object.values(memberTypes)
+          .reduce((sum, type) => sum + (type.monthlyAmount || 0), 0) / Object.keys(memberTypes).length;
+        monthlyRevenue = Math.round(activeMembers * averageCotisation);
+      }
+
+      // Vérifier si bureau complet
+      const bureau = section.bureauSection || {};
+      const bureauComplete = !!(bureau.responsable?.name && bureau.secretaire?.name && bureau.tresorier?.name);
+
+      // Mettre à jour le count si différent
+      if (section.membersCount !== membersCount) {
+        await section.update({ membersCount });
+      }
+
+      const sectionWithStats = {
+        ...section.toJSON(),
+        membersCount,
+        stats: {
+          activeMembers,
+          pendingMembers,
+          monthlyRevenue,
+          bureauComplete
         }
-      })
-    ]);
+      };
 
-    // Calculer revenus mensuels (estimation)
-    const association = await Association.findByPk(associationId);
-    const memberTypes = association?.memberTypes || {};
-    
-    let monthlyRevenue = 0;
-    if (Object.keys(memberTypes).length > 0) {
-      // Estimation basée sur le type membre le plus courant
-      const averageCotisation = Object.values(memberTypes)
-        .reduce((sum, type) => sum + (type.monthlyAmount || 0), 0) / Object.keys(memberTypes).length;
-      monthlyRevenue = Math.round(activeMembers * averageCotisation);
+      res.json({
+        success: true,
+        data: {
+          section: sectionWithStats
+        }
+      });
+
+    } catch (error) {
+      console.error('Erreur récupération section:', error);
+      res.status(500).json({
+        error: 'Erreur récupération section',
+        code: 'SECTION_FETCH_ERROR',
+        details: error.message
+      });
     }
-
-    // Vérifier si bureau complet
-    const bureau = section.bureauSection || {};
-    const bureauComplete = !!(bureau.responsable?.name && bureau.secretaire?.name && bureau.tresorier?.name);
-
-    // Mettre à jour le count si différent
-    if (section.membersCount !== membersCount) {
-      await section.update({ membersCount });
-    }
-
-    const sectionWithStats = {
-      ...section.toJSON(),
-      membersCount,
-      stats: {
-        activeMembers,
-        pendingMembers,
-        monthlyRevenue,
-        bureauComplete
-      }
-    };
-
-    res.json({
-      success: true,
-      data: {
-        section: sectionWithStats
-      }
-    });
-
-  } catch (error) {
-    console.error('Erreur récupération section:', error);
-    res.status(500).json({
-      error: 'Erreur récupération section',
-      code: 'SECTION_FETCH_ERROR',
-      details: error.message
-    });
   }
-}
-
-
 }
 
 module.exports = new SectionController();

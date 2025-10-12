@@ -1,3 +1,5 @@
+//src\modules\associations\controllers\memberController.js
+
 const {
   Association,
   AssociationMember,
@@ -9,9 +11,12 @@ const {
 const { Op } = require("sequelize");
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
+
+
+
 class MemberController {
   // 👥 AJOUTER MEMBRE À ASSOCIATION
-  async addMember(req, res) {
+   async addMember(req, res) {
     try {
       const { associationId } = req.params;
 
@@ -20,13 +25,10 @@ class MemberController {
       console.log("associationId:", associationId);
 
       const {
-        // Soit userId direct (si utilisateur existe déjà)
         userId,
-        // Données obligatoires pour créer utilisateur
         firstName,
         lastName,
         phoneNumber,
-        // Données optionnelles dans l'ordre spécifié
         email,
         dateOfBirth,
         gender,
@@ -34,7 +36,6 @@ class MemberController {
         city,
         country,
         postalCode,
-        // Données membership
         memberType,
         sectionId,
         cotisationAmount,
@@ -55,28 +56,33 @@ class MemberController {
         },
       });
 
-      // Vérifier permissions (bureau central ou responsable section)
+      // Vérifier membership et permissions
       const requesterMembership = await AssociationMember.findOne({
         where: {
           userId: req.user.id,
           associationId,
           status: "active",
         },
+        include: [
+          {
+            model: Association,
+            as: "association",
+            attributes: ['rolesConfiguration']
+          }
+        ]
       });
 
-      const userRoles = requesterMembership?.roles || [];
+      // ✅ NOUVEAU : Vérifier permissions avec RBAC moderne
       const canAddMember =
-        userRoles.includes("admin_association") ||
-        userRoles.includes("president") ||
-        userRoles.includes("central_board") ||
-        userRoles.includes("secretaire") ||
-        userRoles.includes("responsable_section") ||
+        requesterMembership?.isAdmin ||
+        hasPermission(requesterMembership, "manage_members") ||
         req.user.role === "super_admin";
 
       if (!canAddMember) {
         return res.status(403).json({
           error: "Permissions insuffisantes pour ajouter un membre",
           code: "INSUFFICIENT_ADD_MEMBER_PERMISSIONS",
+          required: "manage_members",
         });
       }
 
@@ -84,7 +90,6 @@ class MemberController {
       let targetUser;
 
       if (userId) {
-        // Cas 1 : userId fourni directement
         targetUser = await User.findByPk(userId);
         if (!targetUser) {
           return res.status(404).json({
@@ -93,29 +98,22 @@ class MemberController {
           });
         }
       } else if (firstName && lastName && phoneNumber) {
-        // Cas 2 : Créer/trouver utilisateur par ses données
-
-        // D'abord chercher s'il existe déjà
         targetUser = await User.findOne({
           where: { phoneNumber: phoneNumber.trim() },
         });
 
         if (!targetUser) {
-          // Créer nouvel utilisateur avec TOUS les champs optionnels
           targetUser = await User.create({
-            // OBLIGATOIRES
             firstName: firstName.trim(),
             lastName: lastName.trim(),
             phoneNumber: phoneNumber.trim(),
-            // OPTIONNELS dans l'ordre spécifié
             email: email ? email.trim() : null,
             dateOfBirth: dateOfBirth || null,
             gender: gender || null,
             address: address ? address.trim() : null,
             city: city ? city.trim() : null,
-            country: country || "FR", // Défaut FR
+            country: country || "FR",
             postalCode: postalCode ? postalCode.trim() : null,
-            // STATUT
             status: "pending_verification",
           });
 
@@ -193,7 +191,7 @@ class MemberController {
       const finalCotisationAmount =
         cotisationAmount || memberTypeExists.cotisationAmount;
 
-      // Créer le membre
+      // ✅ NOUVEAU : Créer membre avec RBAC moderne
       const member = await AssociationMember.create({
         userId: targetUser.id,
         associationId,
@@ -206,8 +204,11 @@ class MemberController {
         joinDate: new Date(),
         approvedDate: new Date(),
         approvedBy: req.user.id,
-        roles: [],
-        permissions: memberTypeExists.permissions || [],
+        
+        // ✅ RBAC moderne
+        isAdmin: false, // Par défaut pas admin
+        assignedRoles: [], // Pas de rôles custom au départ
+        customPermissions: { granted: [], revoked: [] },
       });
 
       // Charger membre complet pour retour
@@ -259,24 +260,33 @@ class MemberController {
       const { associationId, memberId } = req.params;
       const { memberType, status, sectionId, roles } = req.body;
 
-      // Vérifier accès association avec permissions admin
+      // Vérifier accès association avec permissions
       const membership = await AssociationMember.findOne({
         where: {
           userId: req.user.id,
           associationId,
           status: "active",
         },
+        include: [
+          {
+            model: Association,
+            as: "association",
+            attributes: ['rolesConfiguration']
+          }
+        ]
       });
 
+      // ✅ NOUVEAU : Vérifier permissions avec RBAC moderne
       const canUpdateMember =
-        membership?.roles?.includes("admin_association") ||
-        membership?.roles?.includes("president") ||
+        membership?.isAdmin ||
+        hasPermission(membership, "manage_members") ||
         req.user.role === "super_admin";
 
       if (!canUpdateMember) {
         return res.status(403).json({
           error: "Permission insuffisante pour modifier un membre",
           code: "UPDATE_MEMBER_DENIED",
+          required: "manage_members",
         });
       }
 
@@ -302,7 +312,7 @@ class MemberController {
         });
       }
 
-      // Protection admin : vérifier s'il reste d'autres admins si on retire le rôle admin
+      // Protection admin : vérifier s'il reste d'autres admins si on retire isAdmin
       if (
         roles &&
         !roles.includes("admin_association") &&
@@ -394,7 +404,7 @@ class MemberController {
               where: {
                 associationId,
                 status: "active",
-                id: { [Op.ne]: memberId }, // Exclure le membre actuel
+                id: { [Op.ne]: memberId },
                 [Op.and]: [
                   sequelize.literal(
                     `roles::jsonb @> '["${roleToAssign}"]'::jsonb`
@@ -431,22 +441,18 @@ class MemberController {
           roles.includes("secretaire") ||
           roles.includes("tresorier"))
       ) {
-        // Récupérer l'association avec son bureau actuel
         const association = await Association.findByPk(associationId);
         const currentBureau = association.centralBoard || {};
         const updatedBureau = { ...currentBureau };
 
         // ✅ RETIRER LES ANCIENS TITULAIRES DES POSTES
         if (roles.includes("president")) {
-          // Supprimer l'ancien président du bureau
           delete updatedBureau.president;
         }
         if (roles.includes("secretaire")) {
-          // Supprimer l'ancien secrétaire du bureau
           delete updatedBureau.secretaire;
         }
         if (roles.includes("tresorier")) {
-          // Supprimer l'ancien trésorier du bureau
           delete updatedBureau.tresorier;
         }
 
@@ -481,7 +487,6 @@ class MemberController {
           };
         }
 
-        // Sauvegarder le bureau mis à jour
         await association.update({ centralBoard: updatedBureau });
         console.log("🏛️ Bureau central synchronisé:", updatedBureau);
       }
@@ -497,7 +502,6 @@ class MemberController {
         const currentBureau = association.centralBoard || {};
         const updatedBureau = { ...currentBureau };
 
-        // Supprimer l'utilisateur du bureau
         Object.keys(updatedBureau).forEach((poste) => {
           if (updatedBureau[poste]?.userId === memberToUpdate.userId) {
             delete updatedBureau[poste];
@@ -570,8 +574,7 @@ class MemberController {
         });
       }
 
-      // ✅ SUPPRIMÉ - Le middleware checkPermission('view_members') gère déjà ça !
-      // Plus besoin de vérifier canViewMembers ici
+      // Le middleware checkPermission('view_members') gère déjà les permissions !
 
       // Construire filtres
       const whereClause = { associationId };
@@ -582,25 +585,24 @@ class MemberController {
       // Pagination
       const offset = (page - 1) * limit;
 
-      // Inclusions avec les vrais noms de colonnes
       const includes = [
         {
           model: User,
           as: "user",
           attributes: [
             "id",
-            "firstName", // ✅ camelCase - correspond au model
-            "lastName", // ✅ camelCase - correspond au model
-            "phoneNumber", // ✅ camelCase - correspond au model
+            "firstName",
+            "lastName",
+            "phoneNumber",
             "email",
             "created_at",
           ],
           ...(search && {
             where: {
               [Op.or]: [
-                { firstName: { [Op.iLike]: `%${search}%` } }, // ✅ camelCase
-                { lastName: { [Op.iLike]: `%${search}%` } }, // ✅ camelCase
-                { phoneNumber: { [Op.iLike]: `%${search}%` } }, // ✅ camelCase
+                { firstName: { [Op.iLike]: `%${search}%` } },
+                { lastName: { [Op.iLike]: `%${search}%` } },
+                { phoneNumber: { [Op.iLike]: `%${search}%` } },
               ],
             },
           }),
@@ -622,7 +624,9 @@ class MemberController {
 
       // ✅ NOUVEAU : Vérifier permission finances avec RBAC
       const canViewFinances =
-        membership?.isAdmin || req.user.role === "super_admin";
+        membership?.isAdmin ||
+        hasPermission(membership, "view_finances") ||
+        req.user.role === "super_admin";
 
       // Formater les membres pour le frontend
       const formattedMembers = members.map((member) => {
@@ -650,7 +654,6 @@ class MemberController {
             : null,
           roles: member.roles || [],
           cotisationAmount: member.cotisationAmount,
-          // Données simulées pour compatibilité frontend
           totalContributed: "0",
           contributionStatus: "uptodate",
           ancienneteTotal: 0,
@@ -670,7 +673,6 @@ class MemberController {
           ).toString();
           memberData.ancienneteTotal = monthsActive;
 
-          // Simuler statut contribution basé sur ancienneté
           const daysSinceJoin = Math.floor(
             (Date.now() - joinDate.getTime()) / (1000 * 60 * 60 * 24)
           );
@@ -796,7 +798,7 @@ class MemberController {
           confirm: true,
           automatic_payment_methods: {
             enabled: true,
-            allow_redirects: "never", // ✅ Pas de redirect = pas de return_url nécessaire
+            allow_redirects: "never",
           },
           metadata: {
             associationId: String(associationId),
@@ -852,10 +854,9 @@ class MemberController {
           },
         });
       } catch (stripeError) {
-        // Échec paiement Stripe
         await transaction.update({
           status: "failed",
-          failureReason: stripeError.message.substring(0, 250), // ✅ Tronqué
+          failureReason: stripeError.message.substring(0, 250),
         });
 
         throw stripeError;
@@ -890,8 +891,13 @@ class MemberController {
             {
               model: User,
               as: "user",
-              attributes: ["id", "firstName", "lastName", "phoneNumber"], // ✅ FIX: firstName + lastName au lieu de fullName
+              attributes: ["id", "firstName", "lastName", "phoneNumber"],
             },
+            {
+              model: Association,
+              as: "association",
+              attributes: ['rolesConfiguration']
+            }
           ],
         }),
         AssociationMember.findOne({
@@ -900,6 +906,13 @@ class MemberController {
             associationId,
             status: "active",
           },
+          include: [
+            {
+              model: Association,
+              as: "association",
+              attributes: ['rolesConfiguration']
+            }
+          ]
         }),
       ]);
 
@@ -912,19 +925,18 @@ class MemberController {
 
       // Vérifier permissions
       const isOwnData = targetMember.userId === req.user.id;
-      const userRoles = requesterMembership?.roles || [];
 
-      // ✅ FIX: Supprimer checkPermission qui n'existe pas
+      // ✅ NOUVEAU : Vérifier permissions avec RBAC moderne
       const canViewFinances =
-        userRoles.includes("admin_association") ||
-        userRoles.includes("tresorier") ||
-        userRoles.includes("president") ||
+        requesterMembership?.isAdmin ||
+        hasPermission(requesterMembership, "view_finances") ||
         req.user.role === "super_admin";
 
       if (!isOwnData && !canViewFinances) {
         return res.status(403).json({
           error: "Accès non autorisé aux données financières",
           code: "FINANCIAL_DATA_ACCESS_DENIED",
+          required: "view_finances",
         });
       }
 
@@ -1023,7 +1035,7 @@ class MemberController {
               id: targetMember.user.id,
               firstName: targetMember.user.firstName,
               lastName: targetMember.user.lastName,
-              fullName: `${targetMember.user.firstName} ${targetMember.user.lastName}`, // ✅ Concaténation côté backend
+              fullName: `${targetMember.user.firstName} ${targetMember.user.lastName}`,
               phoneNumber: targetMember.user.phoneNumber,
             },
             memberType: targetMember.memberType,
@@ -1148,6 +1160,68 @@ class MemberController {
       res.status(500).json({
         error: "Erreur modification statut membre",
         code: "MEMBER_STATUS_UPDATE_ERROR",
+        details: error.message,
+      });
+    }
+  }
+
+  // ... (le reste des méthodes reste identique)
+
+  // Obtenir détails d'un membre
+  async getMember(req, res) {
+    try {
+      const { associationId, memberId } = req.params;
+
+      const membership = await AssociationMember.findOne({
+        where: {
+          userId: req.user.id,
+          associationId,
+          status: "active",
+        },
+      });
+
+      if (!membership && req.user.role !== "super_admin") {
+        return res.status(403).json({
+          error: "Accès association non autorisé",
+          code: "ASSOCIATION_ACCESS_DENIED",
+        });
+      }
+
+      const member = await AssociationMember.findOne({
+        where: {
+          id: memberId,
+          associationId,
+        },
+        include: [
+          {
+            model: User,
+            as: "user",
+            attributes: ["id", "firstName", "lastName", "phoneNumber", "email"],
+          },
+          {
+            model: Section,
+            as: "section",
+            attributes: ["id", "name", "country", "city"],
+          },
+        ],
+      });
+
+      if (!member) {
+        return res.status(404).json({
+          error: "Membre introuvable",
+          code: "MEMBER_NOT_FOUND",
+        });
+      }
+
+      res.json({
+        success: true,
+        data: { member },
+      });
+    } catch (error) {
+      console.error("Erreur récupération membre:", error);
+      res.status(500).json({
+        error: "Erreur récupération membre",
+        code: "MEMBER_FETCH_ERROR",
         details: error.message,
       });
     }

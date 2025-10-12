@@ -8,50 +8,12 @@ const {
 } = require("../../../models");
 const { Op } = require("sequelize");
 
-// Fonction utilitaire pour vérifier permissions (flexible par association)
-function checkPermission(membership, action) {
-  if (!membership || !membership.association) return false;
+// ✅ NOUVEAU : Import système RBAC moderne
+const { hasPermission, getEffectivePermissions } = require('../../../core/middleware/checkPermission');
 
-  const permissions = membership.association.permissionsMatrix || {};
-  const actionConfig = permissions[action];
-
-  if (!actionConfig) return false;
-
-  const userRoles = membership.roles || [];
-  const allowedRoles = actionConfig.allowed_roles || [];
-
-  return userRoles.some((role) => allowedRoles.includes(role));
-}
-
-// Fonction utilitaire pour calculer permissions utilisateur
-async function getUserPermissions(userId, associationId) {
-  try {
-    const membership = await AssociationMember.findOne({
-      where: { userId, associationId, status: "active" },
-      include: [{ model: Association, as: "association" }],
-    });
-
-    if (!membership) return {};
-
-    const permissionsMatrix = membership.association.permissionsMatrix || {};
-    const userRoles = membership.roles || [];
-    const userPermissions = {};
-
-    // Calculer permissions effectives
-    Object.keys(permissionsMatrix).forEach((action) => {
-      const config = permissionsMatrix[action];
-      const allowedRoles = config.allowed_roles || [];
-      userPermissions[action] = userRoles.some((role) =>
-        allowedRoles.includes(role)
-      );
-    });
-
-    return userPermissions;
-  } catch (error) {
-    console.error("Erreur calcul permissions:", error);
-    return {};
-  }
-}
+// ❌ SUPPRIMÉ : Anciennes fonctions legacy (lignes 14-61)
+// Ces fonctions utilisaient l'ancien système membership.roles
+// Maintenant on utilise directement hasPermission() du middleware
 
 class AssociationController {
   // 🏛️ CRÉER ASSOCIATION (avec KYB)
@@ -161,16 +123,18 @@ class AssociationController {
         status: "pending_validation", // En attente validation KYB
       });
 
-      // Ajouter le créateur comme membre fondateur
+      // ✅ NOUVEAU : Créer membership avec RBAC moderne
       await AssociationMember.create({
         userId: req.user.id,
         associationId: association.id,
-        memberType: "membre_actif", // ✅ Utilise un type existant dans defaultMemberTypes
+        memberType: "membre_actif",
         status: "active",
-        // 🎯 FIX: Donner les rôles de président ET admin
-        roles: [
-          "admin_association", // ✅ Rôle technique (accès à tout)
-        ],
+        
+        // ✅ RBAC moderne
+        isAdmin: true, // Le créateur est admin
+        assignedRoles: [], // Pas de rôles custom au départ
+        customPermissions: { granted: [], revoked: [] },
+        
         joinDate: new Date(),
         approvedDate: new Date(),
         approvedBy: req.user.id,
@@ -233,6 +197,13 @@ class AssociationController {
           associationId: id,
           status: "active",
         },
+        include: [
+          {
+            model: Association,
+            as: "association",
+            attributes: ['rolesConfiguration'] // ✅ Charger la config RBAC
+          }
+        ]
       });
 
       if (!membership && req.user.role !== "super_admin") {
@@ -251,13 +222,13 @@ class AssociationController {
         },
       ];
 
-      // ✅ CORRECTION : Utiliser le bon alias 'memberships' au lieu de 'members'
+      // ✅ NOUVEAU : Utiliser hasPermission au lieu de checkPermission
       if (includeMembers === "true") {
-        const canViewMembers = checkPermission(membership, "view_member_list");
+        const canViewMembers = hasPermission(membership, "view_member_list");
         if (canViewMembers || req.user.role === "super_admin") {
           includes.push({
             model: AssociationMember,
-            as: "memberships", // ✅ Changé de 'members' à 'memberships'
+            as: "memberships",
             include: [
               {
                 model: User,
@@ -287,8 +258,9 @@ class AssociationController {
       // Masquer informations sensibles selon permissions
       const response = association.toJSON();
 
+      // ✅ NOUVEAU : Utiliser hasPermission
       if (
-        !checkPermission(membership, "view_finances") &&
+        !hasPermission(membership, "view_finances") &&
         req.user.role !== "super_admin"
       ) {
         delete response.totalBalance;
@@ -296,12 +268,17 @@ class AssociationController {
         delete response.iban;
       }
 
+      // ✅ NOUVEAU : Calculer permissions effectives
+      const effectivePermissions = membership ? 
+        getEffectivePermissions(membership) : 
+        {};
+
       res.json({
         success: true,
         data: {
           association: response,
           userMembership: membership,
-          userPermissions: await getUserPermissions(req.user.id, id),
+          userPermissions: effectivePermissions, // ✅ Permissions calculées par le middleware
         },
       });
     } catch (error) {
@@ -450,7 +427,9 @@ class AssociationController {
           membersCount: assoc.membersCount || 0,
           userMembership: {
             memberType: membership.memberType,
-            roles: membership.roles,
+            // ✅ NOUVEAU : Retourner RBAC moderne
+            isAdmin: membership.isAdmin,
+            assignedRoles: membership.assignedRoles || [],
             status: membership.status,
             seniority: membership.getTotalSeniority(),
             section: membership.section,
@@ -486,23 +465,31 @@ class AssociationController {
     try {
       const { id } = req.params;
 
-      // Seul le président ou super admin peut supprimer
+      // Charger membership avec association pour RBAC
       const membership = await AssociationMember.findOne({
         where: {
           userId: req.user.id,
           associationId: id,
           status: "active",
         },
+        include: [
+          {
+            model: Association,
+            as: "association",
+            attributes: ['rolesConfiguration']
+          }
+        ]
       });
 
+      // ✅ NOUVEAU : Vérifier avec isAdmin au lieu de rôle hardcodé
       const canDelete =
-        (membership && membership.roles?.includes("president")) ||
+        membership?.isAdmin ||
         req.user.role === "super_admin";
 
       if (!canDelete) {
         return res.status(403).json({
-          error: "Seul le président peut supprimer l'association",
-          code: "PRESIDENT_ONLY_DELETE",
+          error: "Seul l'administrateur peut supprimer l'association",
+          code: "ADMIN_ONLY_DELETE",
         });
       }
 
@@ -902,7 +889,6 @@ class AssociationController {
           fileName: document.fileName,
           fileSize: document.fileSize,
           mimeType: document.mimeType,
-          // ✅ Sans path.basename
           viewUrl: `${document.fileUrl}?type=application/pdf`,
         },
       });
@@ -977,7 +963,7 @@ class AssociationController {
 
       const updates = {};
 
-      // ✅ FIX: Traiter le bureau central avec le bon mapping de champ
+      // Traiter le bureau central avec le bon mapping de champ
       if (bureauCentral) {
         const processedBureau = {};
 
@@ -1017,8 +1003,6 @@ class AssociationController {
           }
         }
 
-        // ✅ FIX CRITIQUE: Utiliser 'centralBoard' au lieu de 'bureauCentral'
-        // Car le champ en base s'appelle 'central_board'
         updates.centralBoard = processedBureau;
         console.log("📝 Bureau à sauvegarder:", processedBureau);
       }
@@ -1109,22 +1093,27 @@ class AssociationController {
         });
       }
 
-      // Vérifier permissions
+      // Charger membership avec association pour RBAC
       const membership = await AssociationMember.findOne({
         where: {
           userId: req.user.id,
           associationId,
           status: "active",
         },
+        include: [
+          {
+            model: Association,
+            as: "association",
+            attributes: ['rolesConfiguration']
+          }
+        ]
       });
 
+      // ✅ NOUVEAU : Vérifier avec hasPermission au lieu de hard-code
       const canUpdate =
         req.user.role === "super_admin" ||
-        (membership &&
-          (membership.roles?.includes("admin_association") ||
-            membership.roles?.includes("president") ||
-            membership.roles?.includes("secretaire") ||
-            membership.roles?.includes("tresorier")));
+        membership?.isAdmin ||
+        hasPermission(membership, "modify_settings");
 
       if (!canUpdate) {
         return res.status(403).json({
@@ -1200,6 +1189,7 @@ class AssociationController {
         updateData.accessRights = mergedRights;
         console.log("✅ Droits d'accès mis à jour:", Object.keys(mergedRights));
       }
+      
       // GESTION PERMISSIONS MATRIX
       if (permissionsMatrix !== undefined) {
         if (typeof permissionsMatrix !== "object") {
@@ -1209,65 +1199,13 @@ class AssociationController {
           });
         }
 
-        // Validation des permissions
-        const validActions = [
-          "view_finances",
-          "manage_members",
-          "approve_aids",
-          "view_member_list",
-          "export_data",
-          "manage_events",
-        ];
-
-        const validRoles = [
-          "admin_association",
-          "president",
-          "secretaire",
-          "tresorier",
-          "responsable_section",
-          "secretaire_section",
-          "tresorier_section",
-        ];
-
-        for (const [action, config] of Object.entries(permissionsMatrix)) {
-          if (!validActions.includes(action)) {
-            return res.status(400).json({
-              error: `Action permission inconnue: ${action}`,
-              code: "INVALID_PERMISSION_ACTION",
-            });
-          }
-
-          if (!config.allowed_roles || !Array.isArray(config.allowed_roles)) {
-            return res.status(400).json({
-              error: `${action}.allowed_roles doit être un tableau`,
-              code: "INVALID_PERMISSION_ROLES",
-            });
-          }
-
-          for (const role of config.allowed_roles) {
-            if (!validRoles.includes(role)) {
-              return res.status(400).json({
-                error: `Rôle inconnu: ${role}`,
-                code: "INVALID_ROLE",
-              });
-            }
-          }
-        }
-
-        // S'assurer que admin_association est toujours inclus dans toutes les permissions
-        Object.keys(permissionsMatrix).forEach((action) => {
-          const config = permissionsMatrix[action];
-          if (
-            config.allowed_roles &&
-            !config.allowed_roles.includes("admin_association")
-          ) {
-            config.allowed_roles.unshift("admin_association"); // Ajouter en premier
-          }
-        });
+        // ⚠️ NOTE : Cette section gère l'ANCIENNE permissionsMatrix
+        // Elle sera progressivement remplacée par rolesConfiguration
+        // Pour l'instant on la maintient pour compatibilité
 
         updateData.permissionsMatrix = permissionsMatrix;
         console.log(
-          "✅ Matrice de permissions mise à jour (admin protégé):",
+          "✅ Matrice de permissions mise à jour (legacy):",
           Object.keys(permissionsMatrix)
         );
       }

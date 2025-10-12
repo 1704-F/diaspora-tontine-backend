@@ -10,6 +10,9 @@ const {
   AssociationMember,
 } = require("../../../models");
 
+// ✅ NOUVEAU : Import système RBAC moderne
+const { hasPermission, getEffectivePermissions } = require('../../../core/middleware/checkPermission');
+
 class IncomeEntryController {
   constructor() {
     // Bind toutes les méthodes pour préserver le contexte this
@@ -30,6 +33,7 @@ class IncomeEntryController {
     this.createIncomeType = this.createIncomeType.bind(this);
     this.sendThanks = this.sendThanks.bind(this);
   }
+
   /**
    * 💰 Créer nouvelle entrée d'argent
    * POST /api/v1/associations/:associationId/income-entries
@@ -92,6 +96,13 @@ class IncomeEntryController {
           associationId: parsedAssociationId,
           status: "active",
         },
+        include: [
+          {
+            model: Association,
+            as: "association",
+            attributes: ['rolesConfiguration']
+          }
+        ]
       });
 
       if (!membership) {
@@ -101,26 +112,17 @@ class IncomeEntryController {
         });
       }
 
-      // Vérifier permissions d'enregistrement
-      const userRoles = membership.roles || [];
+      // ✅ NOUVEAU : Vérifier permissions avec RBAC moderne
       const canRegisterIncome =
-        userRoles.includes("admin_association") ||
-        userRoles.includes("president") ||
-        userRoles.includes("tresorier") ||
-        userRoles.includes("secretaire") ||
+        membership.isAdmin ||
+        hasPermission(membership, "manage_finances") ||
         req.user.role === "super_admin";
 
       if (!canRegisterIncome) {
         return res.status(403).json({
-          error:
-            "Permissions insuffisantes pour enregistrer des entrées d'argent",
+          error: "Permissions insuffisantes pour enregistrer des entrées d'argent",
           code: "INSUFFICIENT_PERMISSIONS",
-          requiredRoles: [
-            "admin_association",
-            "president",
-            "tresorier",
-            "secretaire",
-          ],
+          required: "manage_finances",
         });
       }
 
@@ -195,7 +197,7 @@ class IncomeEntryController {
         publiclyVisible,
         thanksRequired,
         tags,
-        status: "pending", // Toujours en attente de validation
+        status: "pending",
         metadata: {
           createdBy: req.user.id,
           ipAddress: req.ip,
@@ -336,7 +338,6 @@ class IncomeEntryController {
         order: [["receivedDate", "DESC"]],
       });
 
-      // ✅ CORRECTION : Appeler la méthode d'instance
       const stats = await this.getIncomeStatistics(
         parsedAssociationId,
         whereClause
@@ -483,19 +484,26 @@ class IncomeEntryController {
           associationId: parseInt(associationId),
           status: "active",
         },
+        include: [
+          {
+            model: Association,
+            as: "association",
+            attributes: ['rolesConfiguration']
+          }
+        ]
       });
 
-      const userRoles = membership?.roles || [];
+      // ✅ NOUVEAU : Vérifier permissions avec RBAC moderne
       const canValidate =
-        userRoles.includes("admin_association") ||
-        userRoles.includes("president") ||
-        userRoles.includes("tresorier") ||
+        membership?.isAdmin ||
+        hasPermission(membership, "validate_expenses") ||
         req.user.role === "super_admin";
 
       if (!canValidate) {
         return res.status(403).json({
           error: "Permissions insuffisantes pour valider",
           code: "INSUFFICIENT_VALIDATION_RIGHTS",
+          required: "validate_expenses",
         });
       }
 
@@ -569,19 +577,26 @@ class IncomeEntryController {
           associationId: parseInt(associationId),
           status: "active",
         },
+        include: [
+          {
+            model: Association,
+            as: "association",
+            attributes: ['rolesConfiguration']
+          }
+        ]
       });
 
-      const userRoles = membership?.roles || [];
+      // ✅ NOUVEAU : Vérifier permissions avec RBAC moderne
       const canReject =
-        userRoles.includes("admin_association") ||
-        userRoles.includes("president") ||
-        userRoles.includes("tresorier") ||
+        membership?.isAdmin ||
+        hasPermission(membership, "validate_expenses") ||
         req.user.role === "super_admin";
 
       if (!canReject) {
         return res.status(403).json({
           error: "Permissions insuffisantes pour rejeter",
           code: "INSUFFICIENT_VALIDATION_RIGHTS",
+          required: "validate_expenses",
         });
       }
 
@@ -805,7 +820,7 @@ class IncomeEntryController {
         where: {
           id: parseInt(entryId),
           associationId: parseInt(associationId),
-          status: "pending", // Seules les entrées en attente peuvent être modifiées
+          status: "pending",
         },
       });
 
@@ -816,21 +831,34 @@ class IncomeEntryController {
         });
       }
 
-      // Vérifier permissions (fait par middleware)
-      const membership = req.membership;
-      const userRoles = membership.roles || [];
+      // Vérifier permissions
+      const membership = await AssociationMember.findOne({
+        where: {
+          userId: req.user.id,
+          associationId: parseInt(associationId),
+          status: "active",
+        },
+        include: [
+          {
+            model: Association,
+            as: "association",
+            attributes: ['rolesConfiguration']
+          }
+        ]
+      });
 
-      // Seul le créateur ou admin peut modifier
+      // ✅ NOUVEAU : Vérifier permissions avec RBAC moderne
       const canModify =
         incomeEntry.registeredBy === req.user.id ||
-        userRoles.includes("admin_association") ||
-        userRoles.includes("president") ||
+        membership?.isAdmin ||
+        hasPermission(membership, "manage_finances") ||
         req.user.role === "super_admin";
 
       if (!canModify) {
         return res.status(403).json({
           error: "Permissions insuffisantes pour modifier cette entrée",
           code: "INSUFFICIENT_MODIFY_RIGHTS",
+          required: "manage_finances",
         });
       }
 
@@ -879,7 +907,7 @@ class IncomeEntryController {
 
       // Mettre à jour
       await incomeEntry.update(updateData, {
-        userId: req.user.id, // Pour audit trail
+        userId: req.user.id,
       });
 
       // Récupérer l'entrée mise à jour avec relations
@@ -927,7 +955,7 @@ class IncomeEntryController {
         where: {
           id: parseInt(entryId),
           associationId: parseInt(associationId),
-          status: ["pending", "rejected"], // Seules ces entrées peuvent être annulées
+          status: ["pending", "rejected"],
         },
       });
 
@@ -939,19 +967,33 @@ class IncomeEntryController {
       }
 
       // Vérifier permissions
-      const membership = req.membership;
-      const userRoles = membership.roles || [];
+      const membership = await AssociationMember.findOne({
+        where: {
+          userId: req.user.id,
+          associationId: parseInt(associationId),
+          status: "active",
+        },
+        include: [
+          {
+            model: Association,
+            as: "association",
+            attributes: ['rolesConfiguration']
+          }
+        ]
+      });
 
+      // ✅ NOUVEAU : Vérifier permissions avec RBAC moderne
       const canCancel =
         incomeEntry.registeredBy === req.user.id ||
-        userRoles.includes("admin_association") ||
-        userRoles.includes("president") ||
+        membership?.isAdmin ||
+        hasPermission(membership, "manage_finances") ||
         req.user.role === "super_admin";
 
       if (!canCancel) {
         return res.status(403).json({
           error: "Permissions insuffisantes pour annuler cette entrée",
           code: "INSUFFICIENT_CANCEL_RIGHTS",
+          required: "manage_finances",
         });
       }
 
@@ -1012,19 +1054,33 @@ class IncomeEntryController {
       }
 
       // Vérifier permissions
-      const membership = req.membership;
-      const userRoles = membership.roles || [];
+      const membership = await AssociationMember.findOne({
+        where: {
+          userId: req.user.id,
+          associationId: parseInt(associationId),
+          status: "active",
+        },
+        include: [
+          {
+            model: Association,
+            as: "association",
+            attributes: ['rolesConfiguration']
+          }
+        ]
+      });
 
+      // ✅ NOUVEAU : Vérifier permissions avec RBAC moderne
       const canResubmit =
         incomeEntry.registeredBy === req.user.id ||
-        userRoles.includes("admin_association") ||
-        userRoles.includes("president") ||
+        membership?.isAdmin ||
+        hasPermission(membership, "manage_finances") ||
         req.user.role === "super_admin";
 
       if (!canResubmit) {
         return res.status(403).json({
           error: "Permissions insuffisantes pour resoumettre",
           code: "INSUFFICIENT_RESUBMIT_RIGHTS",
+          required: "manage_finances",
         });
       }
 
@@ -1070,9 +1126,6 @@ class IncomeEntryController {
   async uploadDocument(req, res) {
     try {
       const { associationId, entryId } = req.params;
-
-      // TODO: Intégrer avec Cloudinary upload middleware
-      // const uploadedFile = req.file;
 
       const incomeEntry = await IncomeEntry.findOne({
         where: {
@@ -1141,7 +1194,7 @@ class IncomeEntryController {
       // Construire filtres
       let whereClause = {
         associationId: parseInt(associationId),
-        status: "validated", // Seulement les entrées validées
+        status: "validated",
       };
 
       if (dateFrom && dateTo) {
@@ -1263,7 +1316,7 @@ class IncomeEntryController {
             attributes: ["id", "name"],
           },
         ],
-        order: [["createdAt", "ASC"]], // Plus anciennes en premier
+        order: [["createdAt", "ASC"]],
       });
 
       // Calculer statistiques
@@ -1276,7 +1329,7 @@ class IncomeEntryController {
         byType: {},
         byUrgency: {
           normal: 0,
-          urgent: 0, // Entries créées il y a plus de 7 jours
+          urgent: 0,
         },
       };
 
@@ -1419,8 +1472,6 @@ class IncomeEntryController {
 
       // Récupérer types existants
       let currentTypes = association.incomeTypes || {};
-
-      // ⚠️ IMPORTANT : Créer un nouvel objet pour forcer la détection du changement
       currentTypes = { ...currentTypes };
 
       // Vérifier que le type n'existe pas déjà
@@ -1449,7 +1500,6 @@ class IncomeEntryController {
 
       console.log("📝 Avant sauvegarde:", currentTypes);
 
-      // ✅ SOLUTION : Utiliser .changed() pour forcer la détection
       association.changed("incomeTypes", true);
       association.incomeTypes = currentTypes;
 
@@ -1505,7 +1555,6 @@ class IncomeEntryController {
       }
 
       // TODO: Intégrer avec service d'envoi (email, SMS)
-      // await emailService.sendThanks(incomeEntry, thanksMessage);
 
       // Marquer comme envoyé
       await incomeEntry.update({
@@ -1537,14 +1586,11 @@ class IncomeEntryController {
 
 // 🔧 FONCTIONS UTILITAIRES
 async function generateReceiptPdf(incomeEntry) {
-  // TODO: Implémenter génération PDF avec Puppeteer
   console.log(`📄 Génération PDF reçu pour entrée ${incomeEntry.id}`);
   return `https://cdn.diasporatontine.com/receipts/${incomeEntry.receiptNumber}.pdf`;
 }
 
-// 🔧 FONCTIONS UTILITAIRES EXPORT
 async function generateCSVExport(data) {
-  // TODO: Implémenter génération CSV
   console.log("📊 Génération export CSV...");
   return {
     url: `https://cdn.diasporatontine.com/exports/income_entries_${Date.now()}.csv`,
@@ -1553,7 +1599,6 @@ async function generateCSVExport(data) {
 }
 
 async function generateExcelExport(data) {
-  // TODO: Implémenter génération Excel avec exceljs
   console.log("📊 Génération export Excel...");
   return {
     url: `https://cdn.diasporatontine.com/exports/income_entries_${Date.now()}.xlsx`,
@@ -1562,7 +1607,6 @@ async function generateExcelExport(data) {
 }
 
 async function generatePDFExport(data, associationId) {
-  // TODO: Implémenter génération PDF avec Puppeteer
   console.log("📊 Génération export PDF...");
   return {
     url: `https://cdn.diasporatontine.com/exports/income_entries_${associationId}_${Date.now()}.pdf`,
