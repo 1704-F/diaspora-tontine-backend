@@ -10,179 +10,188 @@ const { Op } = require("sequelize");
 
 // ✅ NOUVEAU : Import système RBAC moderne
 const { hasPermission, getEffectivePermissions } = require('../../../core/middleware/checkPermission');
-
+const { availablePermissions } = require('../../../config/association/defaultPermissions');
 // ❌ SUPPRIMÉ : Anciennes fonctions legacy (lignes 14-61)
 // Ces fonctions utilisaient l'ancien système membership.roles
 // Maintenant on utilise directement hasPermission() du middleware
 
 class AssociationController {
   // 🏛️ CRÉER ASSOCIATION (avec KYB)
-  async createAssociation(req, res) {
-    try {
-      const {
-        name,
-        description,
-        legalStatus,
-        country,
-        city,
-        registrationNumber,
-        memberTypes,
-        bureauCentral,
-        permissionsMatrix,
-        settings,
-      } = req.body;
+async createAssociation(req, res) {
+  try {
+    const {
+      name,
+      description,
+      legalStatus,
+      country,
+      city,
+      registrationNumber,
+      memberTypes,
+      bureauCentral,
+      permissionsMatrix,
+      settings,
+    } = req.body;
 
-      // Vérifier que l'utilisateur n'a pas déjà trop d'associations
-      const userAssociations = await AssociationMember.count({
-        where: {
-          userId: req.user.id,
-          status: "active",
-        },
-      });
-
-      const maxAssociations = req.user.role === "super_admin" ? 100 : 5;
-      if (userAssociations >= maxAssociations) {
-        return res.status(400).json({
-          error: "Limite d'associations atteinte",
-          code: "MAX_ASSOCIATIONS_REACHED",
-          current: userAssociations,
-          max: maxAssociations,
-        });
-      }
-
-      // Configuration par défaut des types membres si non fournie
-      const defaultMemberTypes = memberTypes || [
-        {
-          name: "membre_simple",
-          cotisationAmount: 10.0,
-          permissions: ["view_profile", "participate_events"],
-          description: "Membre standard",
-        },
-        {
-          name: "membre_actif",
-          cotisationAmount: 15.0,
-          permissions: ["view_profile", "participate_events", "vote"],
-          description: "Membre avec droit de vote",
-        },
-      ];
-
-      // Configuration bureau par défaut
-      const defaultBureau = bureauCentral || {
-        president: {
-          userId: req.user.id,
-          name:
-            req.user.firstName && req.user.lastName
-              ? `${req.user.firstName} ${req.user.lastName}`.trim()
-              : req.user.firstName || "Utilisateur",
-        },
-        secretaire: { userId: null, name: null },
-        tresorier: { userId: null, name: null },
-      };
-
-      // Générer slug unique à partir du nom
-      const generateSlug = (name) => {
-        return name
-          .toLowerCase()
-          .replace(/[àáäâ]/g, "a")
-          .replace(/[èéëê]/g, "e")
-          .replace(/[ìíïî]/g, "i")
-          .replace(/[òóöô]/g, "o")
-          .replace(/[ùúüû]/g, "u")
-          .replace(/[ç]/g, "c")
-          .replace(/[^a-z0-9 -]/g, "")
-          .replace(/\s+/g, "-")
-          .replace(/-+/g, "-")
-          .trim("-");
-      };
-
-      let slug = generateSlug(name);
-
-      // Vérifier unicité du slug
-      let slugExists = await Association.findOne({ where: { slug } });
-      let counter = 1;
-      while (slugExists) {
-        slug = `${generateSlug(name)}-${counter}`;
-        slugExists = await Association.findOne({ where: { slug } });
-        counter++;
-      }
-
-      // Créer l'association
-      const association = await Association.create({
-        name,
-        slug,
-        description,
-        legalStatus,
-        country,
-        city,
-        registrationNumber,
-        memberTypes: defaultMemberTypes,
-        bureauCentral: defaultBureau,
-        permissionsMatrix: permissionsMatrix || {},
-        settings: settings || {},
-        founderId: req.user.id,
-        status: "pending_validation", // En attente validation KYB
-      });
-
-      // ✅ NOUVEAU : Créer membership avec RBAC moderne
-      await AssociationMember.create({
+    // Vérifier que l'utilisateur n'a pas déjà trop d'associations
+    const userAssociations = await AssociationMember.count({
+      where: {
         userId: req.user.id,
-        associationId: association.id,
-        memberType: "membre_actif",
         status: "active",
-        
-        // ✅ RBAC moderne
-        isAdmin: true, // Le créateur est admin
-        assignedRoles: [], // Pas de rôles custom au départ
-        customPermissions: { granted: [], revoked: [] },
-        
-        joinDate: new Date(),
-        approvedDate: new Date(),
-        approvedBy: req.user.id,
-      });
+      },
+    });
 
-      // Charger association complète pour retour
-      const associationComplete = await Association.findByPk(association.id, {
-        include: [
-          {
-            model: AssociationMember,
-            as: "memberships",
-            include: [
-              {
-                model: User,
-                as: "user",
-                attributes: ["id", "firstName", "lastName", "phoneNumber"],
-              },
-            ],
-          },
-          {
-            model: Section,
-            as: "sections",
-          },
-        ],
-      });
-
-      res.status(201).json({
-        success: true,
-        message: "Association créée avec succès",
-        data: {
-          association: associationComplete,
-          nextSteps: [
-            "Télécharger documents KYB",
-            "Compléter bureau association",
-            "Configurer types membres",
-            "Inviter premiers membres",
-          ],
-        },
-      });
-    } catch (error) {
-      console.error("Erreur création association:", error);
-      res.status(500).json({
-        error: "Erreur création association",
-        code: "ASSOCIATION_CREATION_ERROR",
-        details: error.message,
+    const maxAssociations = req.user.role === "super_admin" ? 100 : 5;
+    if (userAssociations >= maxAssociations) {
+      return res.status(400).json({
+        error: "Limite d'associations atteinte",
+        code: "MAX_ASSOCIATIONS_REACHED",
+        current: userAssociations,
+        max: maxAssociations,
       });
     }
+
+    // Configuration par défaut des types membres si non fournie
+    const defaultMemberTypes = memberTypes || [
+      {
+        name: "membre_simple",
+        cotisationAmount: 10.0,
+        permissions: ["view_profile", "participate_events"],
+        description: "Membre standard",
+      },
+      {
+        name: "membre_actif",
+        cotisationAmount: 15.0,
+        permissions: ["view_profile", "participate_events", "vote"],
+        description: "Membre avec droit de vote",
+      },
+    ];
+
+    // Configuration bureau par défaut
+    const defaultBureau = bureauCentral || {
+      president: {
+        userId: req.user.id,
+        name:
+          req.user.firstName && req.user.lastName
+            ? `${req.user.firstName} ${req.user.lastName}`.trim()
+            : req.user.firstName || "Utilisateur",
+      },
+      secretaire: { userId: null, name: null },
+      tresorier: { userId: null, name: null },
+    };
+
+    // Générer slug unique à partir du nom
+    const generateSlug = (name) => {
+      return name
+        .toLowerCase()
+        .replace(/[àáäâ]/g, "a")
+        .replace(/[èéëê]/g, "e")
+        .replace(/[ìíïî]/g, "i")
+        .replace(/[òóöô]/g, "o")
+        .replace(/[ùúüû]/g, "u")
+        .replace(/[ç]/g, "c")
+        .replace(/[^a-z0-9 -]/g, "")
+        .replace(/\s+/g, "-")
+        .replace(/-+/g, "-")
+        .trim("-");
+    };
+
+    let slug = generateSlug(name);
+
+    // Vérifier unicité du slug
+    let slugExists = await Association.findOne({ where: { slug } });
+    let counter = 1;
+    while (slugExists) {
+      slug = `${generateSlug(name)}-${counter}`;
+      slugExists = await Association.findOne({ where: { slug } });
+      counter++;
+    }
+
+    // ✅ Créer l'association avec rolesConfiguration initialisé
+    const association = await Association.create({
+      name,
+      slug,
+      description,
+      legalStatus,
+      country,
+      city,
+      registrationNumber,
+      memberTypes: defaultMemberTypes,
+      bureauCentral: defaultBureau,
+      permissionsMatrix: permissionsMatrix || {},
+      settings: settings || {},
+      founderId: req.user.id,
+      status: "pending_validation", // En attente validation KYB
+      
+      // ✅ NOUVEAU : Initialiser rolesConfiguration avec permissions par défaut
+      rolesConfiguration: {
+        version: '1.0',
+        roles: [], // Aucun rôle personnalisé au départ
+        availablePermissions: availablePermissions // ← Permissions du fichier config
+      },
+    });
+
+    console.log(`✅ Association créée avec ${availablePermissions.length} permissions disponibles`);
+
+    // ✅ NOUVEAU : Créer membership avec RBAC moderne
+    await AssociationMember.create({
+      userId: req.user.id,
+      associationId: association.id,
+      memberType: "membre_actif",
+      status: "active",
+      
+      // ✅ RBAC moderne
+      isAdmin: true, // Le créateur est admin
+      assignedRoles: [], // Pas de rôles custom au départ
+      customPermissions: { granted: [], revoked: [] },
+      
+      joinDate: new Date(),
+      approvedDate: new Date(),
+      approvedBy: req.user.id,
+    });
+
+    // Charger association complète pour retour
+    const associationComplete = await Association.findByPk(association.id, {
+      include: [
+        {
+          model: AssociationMember,
+          as: "memberships",
+          include: [
+            {
+              model: User,
+              as: "user",
+              attributes: ["id", "firstName", "lastName", "phoneNumber"],
+            },
+          ],
+        },
+        {
+          model: Section,
+          as: "sections",
+        },
+      ],
+    });
+
+    res.status(201).json({
+      success: true,
+      message: "Association créée avec succès",
+      data: {
+        association: associationComplete,
+        nextSteps: [
+          "Télécharger documents KYB",
+          "Compléter bureau association",
+          "Configurer types membres",
+          "Inviter premiers membres",
+        ],
+      },
+    });
+  } catch (error) {
+    console.error("Erreur création association:", error);
+    res.status(500).json({
+      error: "Erreur création association",
+      code: "ASSOCIATION_CREATION_ERROR",
+      details: error.message,
+    });
   }
+}
 
   // 📋 OBTENIR DÉTAILS ASSOCIATION
   async getAssociation(req, res) {
