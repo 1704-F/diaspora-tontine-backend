@@ -9,292 +9,164 @@ const {
 const { Op } = require("sequelize");
 
 // ✅ NOUVEAU : Import système RBAC moderne
-const { hasPermission, getEffectivePermissions } = require('../../../core/middleware/checkPermission');
-const { availablePermissions } = require('../../../config/association/defaultPermissions');
+const {
+  hasPermission,
+  getEffectivePermissions,
+} = require("../../../core/middleware/checkPermission");
+const {
+  availablePermissions,
+} = require("../../../config/association/defaultPermissions");
 // ❌ SUPPRIMÉ : Anciennes fonctions legacy (lignes 14-61)
 // Ces fonctions utilisaient l'ancien système membership.roles
 // Maintenant on utilise directement hasPermission() du middleware
 
 class AssociationController {
-  // 🏛️ CRÉER ASSOCIATION (avec KYB)
-async createAssociation(req, res) {
-  try {
-    const {
-      name,
-      description,
-      legalStatus,
-      country,
-      city,
-      registrationNumber,
-      memberTypes,
-      bureauCentral,
-      permissionsMatrix,
-      settings,
-    } = req.body;
-
-    // Vérifier que l'utilisateur n'a pas déjà trop d'associations
-    const userAssociations = await AssociationMember.count({
-      where: {
-        userId: req.user.id,
-        status: "active",
-      },
-    });
-
-    const maxAssociations = req.user.role === "super_admin" ? 100 : 5;
-    if (userAssociations >= maxAssociations) {
-      return res.status(400).json({
-        error: "Limite d'associations atteinte",
-        code: "MAX_ASSOCIATIONS_REACHED",
-        current: userAssociations,
-        max: maxAssociations,
-      });
-    }
-
-    // Configuration par défaut des types membres si non fournie
-    const defaultMemberTypes = memberTypes || [
-      {
-        name: "membre_simple",
-        cotisationAmount: 10.0,
-        permissions: ["view_profile", "participate_events"],
-        description: "Membre standard",
-      },
-      {
-        name: "membre_actif",
-        cotisationAmount: 15.0,
-        permissions: ["view_profile", "participate_events", "vote"],
-        description: "Membre avec droit de vote",
-      },
-    ];
-
-    // Configuration bureau par défaut
-    const defaultBureau = bureauCentral || {
-      president: {
-        userId: req.user.id,
-        name:
-          req.user.firstName && req.user.lastName
-            ? `${req.user.firstName} ${req.user.lastName}`.trim()
-            : req.user.firstName || "Utilisateur",
-      },
-      secretaire: { userId: null, name: null },
-      tresorier: { userId: null, name: null },
-    };
-
-    // Générer slug unique à partir du nom
-    const generateSlug = (name) => {
-      return name
-        .toLowerCase()
-        .replace(/[àáäâ]/g, "a")
-        .replace(/[èéëê]/g, "e")
-        .replace(/[ìíïî]/g, "i")
-        .replace(/[òóöô]/g, "o")
-        .replace(/[ùúüû]/g, "u")
-        .replace(/[ç]/g, "c")
-        .replace(/[^a-z0-9 -]/g, "")
-        .replace(/\s+/g, "-")
-        .replace(/-+/g, "-")
-        .trim("-");
-    };
-
-    let slug = generateSlug(name);
-
-    // Vérifier unicité du slug
-    let slugExists = await Association.findOne({ where: { slug } });
-    let counter = 1;
-    while (slugExists) {
-      slug = `${generateSlug(name)}-${counter}`;
-      slugExists = await Association.findOne({ where: { slug } });
-      counter++;
-    }
-
-    // ✅ Créer l'association avec rolesConfiguration initialisé
-    const association = await Association.create({
-      name,
-      slug,
-      description,
-      legalStatus,
-      country,
-      city,
-      registrationNumber,
-      memberTypes: defaultMemberTypes,
-      bureauCentral: defaultBureau,
-      permissionsMatrix: permissionsMatrix || {},
-      settings: settings || {},
-      founderId: req.user.id,
-      status: "pending_validation", // En attente validation KYB
-      
-      // ✅ NOUVEAU : Initialiser rolesConfiguration avec permissions par défaut
-      rolesConfiguration: {
-        version: '1.0',
-        roles: [], // Aucun rôle personnalisé au départ
-        availablePermissions: availablePermissions // ← Permissions du fichier config
-      },
-    });
-
-    console.log(`✅ Association créée avec ${availablePermissions.length} permissions disponibles`);
-
-    // ✅ NOUVEAU : Créer membership avec RBAC moderne
-    await AssociationMember.create({
-      userId: req.user.id,
-      associationId: association.id,
-      memberType: "membre_actif",
-      status: "active",
-      
-      // ✅ RBAC moderne
-      isAdmin: true, // Le créateur est admin
-      assignedRoles: [], // Pas de rôles custom au départ
-      customPermissions: { granted: [], revoked: [] },
-      
-      joinDate: new Date(),
-      approvedDate: new Date(),
-      approvedBy: req.user.id,
-    });
-
-    // Charger association complète pour retour
-    const associationComplete = await Association.findByPk(association.id, {
-      include: [
-        {
-          model: AssociationMember,
-          as: "memberships",
-          include: [
-            {
-              model: User,
-              as: "user",
-              attributes: ["id", "firstName", "lastName", "phoneNumber"],
-            },
-          ],
-        },
-        {
-          model: Section,
-          as: "sections",
-        },
-      ],
-    });
-
-    res.status(201).json({
-      success: true,
-      message: "Association créée avec succès",
-      data: {
-        association: associationComplete,
-        nextSteps: [
-          "Télécharger documents KYB",
-          "Compléter bureau association",
-          "Configurer types membres",
-          "Inviter premiers membres",
-        ],
-      },
-    });
-  } catch (error) {
-    console.error("Erreur création association:", error);
-    res.status(500).json({
-      error: "Erreur création association",
-      code: "ASSOCIATION_CREATION_ERROR",
-      details: error.message,
-    });
-  }
-}
-
-  // 📋 OBTENIR DÉTAILS ASSOCIATION
-  async getAssociation(req, res) {
+  // 📋 OBTENIR DÉTAILS ASSOCIATION - VERSION CORRIGÉE
+  async createAssociation(req, res) {
     try {
-      const { id } = req.params;
-      const { includeMembers = false, includeFinances = false } = req.query;
+      const {
+        name,
+        description,
+        legalStatus,
+        country,
+        city,
+        registrationNumber,
+        memberTypes, // ✅ Optionnel, on fournit un défaut
+        settings,
+      } = req.body;
 
-      // Vérifier accès à l'association
-      const membership = await AssociationMember.findOne({
+      // Vérifier que l'utilisateur n'a pas déjà trop d'associations
+      const userAssociations = await AssociationMember.count({
         where: {
           userId: req.user.id,
-          associationId: id,
           status: "active",
         },
-        include: [
-          {
-            model: Association,
-            as: "association",
-            attributes: ['rolesConfiguration'] // ✅ Charger la config RBAC
-          }
-        ]
       });
 
-      if (!membership && req.user.role !== "super_admin") {
-        return res.status(403).json({
-          error: "Accès association non autorisé",
-          code: "ASSOCIATION_ACCESS_DENIED",
+      const maxAssociations = req.user.role === "super_admin" ? 100 : 5;
+      if (userAssociations >= maxAssociations) {
+        return res.status(400).json({
+          error: "Limite d'associations atteinte",
+          code: "MAX_ASSOCIATIONS_REACHED",
+          current: userAssociations,
+          max: maxAssociations,
         });
       }
 
-      // Construire includes selon permissions
-      const includes = [
-        {
-          model: Section,
-          as: "sections",
-          attributes: ["id", "name", "country", "city", "membersCount"],
-        },
-      ];
+      // ✅ CORRECTION : memberTypes vide par défaut
+      // L'admin configurera les types + rôles dans /settings après création
+      const defaultMemberTypes = memberTypes || [];
 
-      // ✅ NOUVEAU : Utiliser hasPermission au lieu de checkPermission
-      if (includeMembers === "true") {
-        const canViewMembers = hasPermission(membership, "view_member_list");
-        if (canViewMembers || req.user.role === "super_admin") {
-          includes.push({
+      // Générer slug unique à partir du nom
+      const generateSlug = (name) => {
+        return name
+          .toLowerCase()
+          .replace(/[àáäâ]/g, "a")
+          .replace(/[èéëê]/g, "e")
+          .replace(/[ìíïî]/g, "i")
+          .replace(/[òóöô]/g, "o")
+          .replace(/[ùúüû]/g, "u")
+          .replace(/[ç]/g, "c")
+          .replace(/[^a-z0-9 -]/g, "")
+          .replace(/\s+/g, "-")
+          .replace(/-+/g, "-")
+          .trim("-");
+      };
+
+      let slug = generateSlug(name);
+
+      // Vérifier unicité du slug
+      let slugExists = await Association.findOne({ where: { slug } });
+      let counter = 1;
+      while (slugExists) {
+        slug = `${generateSlug(name)}-${counter}`;
+        slugExists = await Association.findOne({ where: { slug } });
+        counter++;
+      }
+
+      // ✅ Créer l'association avec RBAC moderne
+      const association = await Association.create({
+        name,
+        slug,
+        description,
+        legalStatus,
+        country,
+        city,
+        registrationNumber,
+        memberTypes: defaultMemberTypes,
+        customRoles: [], // ✅ Rôles organisationnels vides au départ
+        settings: settings || {},
+        founderId: req.user.id,
+        status: "pending_validation", // En attente validation KYB
+
+        // ✅ Initialiser rolesConfiguration avec permissions par défaut
+        rolesConfiguration: {
+          version: "1.0",
+          roles: [], // Aucun rôle personnalisé au départ
+          availablePermissions: availablePermissions, // ← Permissions du fichier config
+        },
+      });
+
+      console.log(
+        `✅ Association créée avec ${availablePermissions.length} permissions disponibles`
+      );
+
+      // ✅ Créer membership admin avec RBAC moderne
+      await AssociationMember.create({
+        userId: req.user.id,
+        associationId: association.id,
+        memberType: null, // ✅ Pas de type au départ (sera défini après config)
+        status: "active",
+
+        // ✅ RBAC moderne
+        isAdmin: true, // Le créateur est admin
+        assignedRoles: [], // Pas de rôles custom au départ
+        customPermissions: { granted: [], revoked: [] },
+
+        joinDate: new Date(),
+        approvedDate: new Date(),
+        approvedBy: req.user.id,
+      });
+
+      // Charger association complète pour retour
+      const associationComplete = await Association.findByPk(association.id, {
+        include: [
+          {
             model: AssociationMember,
             as: "memberships",
             include: [
               {
                 model: User,
                 as: "user",
-                attributes: [
-                  "id",
-                  "firstName",
-                  "lastName",
-                  "phoneNumber",
-                  "profilePicture",
-                ],
+                attributes: ["id", "firstName", "lastName", "phoneNumber"],
               },
             ],
-          });
-        }
-      }
+          },
+          {
+            model: Section,
+            as: "sections",
+          },
+        ],
+      });
 
-      const association = await Association.findByPk(id, { include: includes });
-
-      if (!association) {
-        return res.status(404).json({
-          error: "Association introuvable",
-          code: "ASSOCIATION_NOT_FOUND",
-        });
-      }
-
-      // Masquer informations sensibles selon permissions
-      const response = association.toJSON();
-
-      // ✅ NOUVEAU : Utiliser hasPermission
-      if (
-        !hasPermission(membership, "view_finances") &&
-        req.user.role !== "super_admin"
-      ) {
-        delete response.totalBalance;
-        delete response.monthlyRevenue;
-        delete response.iban;
-      }
-
-      // ✅ NOUVEAU : Calculer permissions effectives
-      const effectivePermissions = membership ? 
-        getEffectivePermissions(membership) : 
-        {};
-
-      res.json({
+      res.status(201).json({
         success: true,
+        message: "Association créée avec succès",
         data: {
-          association: response,
-          userMembership: membership,
-          userPermissions: effectivePermissions, // ✅ Permissions calculées par le middleware
+          association: associationComplete,
+          nextSteps: [
+            "Télécharger documents KYB",
+            "Créer des rôles dans /settings/roles", // ✅ MODIFIÉ
+            "Configurer types membres avec rôles par défaut", // ✅ MODIFIÉ
+            "Inviter premiers membres",
+          ],
         },
       });
     } catch (error) {
-      console.error("Erreur récupération association:", error);
+      console.error("Erreur création association:", error);
       res.status(500).json({
-        error: "Erreur récupération association",
-        code: "ASSOCIATION_FETCH_ERROR",
+        error: "Erreur création association",
+        code: "ASSOCIATION_CREATION_ERROR",
         details: error.message,
       });
     }
@@ -304,61 +176,164 @@ async createAssociation(req, res) {
   async updateAssociation(req, res) {
     try {
       const { id } = req.params;
-      const { bureauCentral, isMultiSection } = req.body;
+      const { customRoles, isMultiSection } = req.body;
 
       const updates = {};
 
-      // Traiter le bureau central si fourni
-      if (bureauCentral) {
-        const processedBureau = {};
+      // ============================================
+      // GESTION CUSTOM ROLES (Rôles organisationnels)
+      // ============================================
+      if (customRoles) {
+        if (!Array.isArray(customRoles)) {
+          return res.status(400).json({
+            error: "customRoles doit être un tableau",
+            code: "INVALID_CUSTOM_ROLES_FORMAT",
+          });
+        }
 
-        for (const [role, roleData] of Object.entries(bureauCentral)) {
-          if (roleData.firstName && roleData.lastName && roleData.phoneNumber) {
-            // Formater le numéro de téléphone
-            let formattedPhone = roleData.phoneNumber;
-            if (!formattedPhone.startsWith("+")) {
-              formattedPhone = "+" + formattedPhone.replace(/^0+/, "");
-            }
+        const processedRoles = [];
 
-            // Chercher utilisateur existant
-            let user = await User.findOne({
-              where: { phoneNumber: formattedPhone },
+        for (const role of customRoles) {
+          // Validation des champs obligatoires
+          if (!role.id || !role.name || !role.description) {
+            return res.status(400).json({
+              error: "Chaque rôle doit avoir: id, name, description",
+              code: "INVALID_CUSTOM_ROLE",
             });
+          }
 
-            // Si pas trouvé, créer le compte
-            if (!user) {
-              user = await User.create({
-                firstName: roleData.firstName,
-                lastName: roleData.lastName,
-                phoneNumber: formattedPhone,
-                status: "pending_verification",
+          // Si un membre est assigné, vérifier qu'il existe
+          if (role.assignedTo) {
+            // Vérifier si c'est un objet avec firstName/lastName/phoneNumber (nouveau membre)
+            if (
+              role.assignedTo.firstName &&
+              role.assignedTo.lastName &&
+              role.assignedTo.phoneNumber
+            ) {
+              // Formater le numéro de téléphone
+              let formattedPhone = role.assignedTo.phoneNumber;
+              if (!formattedPhone.startsWith("+")) {
+                formattedPhone = "+" + formattedPhone.replace(/^0+/, "");
+              }
+
+              // Chercher utilisateur existant
+              let user = await User.findOne({
+                where: { phoneNumber: formattedPhone },
               });
 
-              console.log(
-                `Compte créé pour ${roleData.firstName} ${roleData.lastName} (${formattedPhone})`
-              );
-            }
+              // Si pas trouvé, créer le compte
+              if (!user) {
+                user = await User.create({
+                  firstName: role.assignedTo.firstName,
+                  lastName: role.assignedTo.lastName,
+                  phoneNumber: formattedPhone,
+                  status: "pending_verification",
+                });
 
-            // Ajouter au bureau avec la structure attendue
-            processedBureau[role] = {
-              userId: user.id,
-              name: `${user.firstName} ${user.lastName}`,
-              role: roleData.role,
-            };
+                console.log(
+                  `✅ Compte créé pour ${role.assignedTo.firstName} ${role.assignedTo.lastName} (${formattedPhone})`
+                );
+
+                // Créer membership si pas encore membre
+                const existingMember = await AssociationMember.findOne({
+                  where: {
+                    userId: user.id,
+                    associationId: id,
+                  },
+                });
+
+                if (!existingMember) {
+                  await AssociationMember.create({
+                    userId: user.id,
+                    associationId: id,
+                    memberType: null, // Sera défini plus tard
+                    status: "pending",
+                    isAdmin: false,
+                    assignedRoles: [],
+                    customPermissions: { granted: [], revoked: [] },
+                    joinDate: new Date(),
+                  });
+
+                  console.log(`✅ Membership créé pour userId ${user.id}`);
+                }
+              }
+
+              // Ajouter le rôle avec l'userId
+              processedRoles.push({
+                id: role.id,
+                name: role.name,
+                description: role.description,
+                assignedTo: user.id,
+                assignedAt: new Date(),
+              });
+            } else if (typeof role.assignedTo === "number") {
+              // C'est déjà un userId, vérifier qu'il existe
+              const memberExists = await AssociationMember.findOne({
+                where: {
+                  userId: role.assignedTo,
+                  associationId: id,
+                  status: "active",
+                },
+              });
+
+              if (!memberExists) {
+                return res.status(400).json({
+                  error: `Le membre (userId: ${role.assignedTo}) n'existe pas ou n'est pas actif`,
+                  code: "MEMBER_NOT_FOUND",
+                  role: role.name,
+                });
+              }
+
+              processedRoles.push({
+                id: role.id,
+                name: role.name,
+                description: role.description,
+                assignedTo: role.assignedTo,
+                assignedAt: role.assignedAt || new Date(),
+              });
+            } else {
+              return res.status(400).json({
+                error: `assignedTo invalide pour le rôle "${role.name}"`,
+                code: "INVALID_ASSIGNED_TO",
+                hint: "Doit être un userId (number) ou un objet {firstName, lastName, phoneNumber}",
+              });
+            }
+          } else {
+            // Rôle non assigné
+            processedRoles.push({
+              id: role.id,
+              name: role.name,
+              description: role.description,
+              assignedTo: null,
+            });
           }
         }
 
-        updates.bureauCentral = processedBureau;
+        updates.customRoles = processedRoles;
+        console.log(
+          "✅ Rôles organisationnels traités:",
+          processedRoles.map(
+            (r) =>
+              `${r.name} ${
+                r.assignedTo ? `(userId: ${r.assignedTo})` : "(libre)"
+              }`
+          )
+        );
       }
 
-      // Traiter le type d'association si fourni
+      // ============================================
+      // GESTION TYPE D'ASSOCIATION
+      // ============================================
       if (typeof isMultiSection === "boolean") {
         updates.isMultiSection = isMultiSection;
       }
 
-      // Mettre à jour l'association
+      // ============================================
+      // SAUVEGARDE
+      // ============================================
       if (Object.keys(updates).length > 0) {
         await Association.update(updates, { where: { id } });
+        console.log(`✅ Association ${id} mise à jour:`, Object.keys(updates));
       }
 
       res.json({
@@ -367,31 +342,13 @@ async createAssociation(req, res) {
         updated: Object.keys(updates),
       });
     } catch (error) {
-      console.error("Erreur mise à jour association:", error);
+      console.error("❌ Erreur mise à jour association:", error);
       res.status(500).json({
         error: "Erreur mise à jour association",
+        code: "ASSOCIATION_UPDATE_ERROR",
         details: error.message,
       });
     }
-  }
-
-  // Fonction utilitaire pour formater les numéros
-  formatPhoneNumber(phone) {
-    // Nettoyer le numéro (supprimer espaces, tirets, etc.)
-    const cleaned = phone.replace(/[\s\-\(\)]/g, "");
-
-    // Si commence par 0, remplacer selon contexte européen
-    if (cleaned.startsWith("0")) {
-      // Logique à adapter selon le pays de la section
-      return "+33" + cleaned.substring(1); // Exemple France
-    }
-
-    // Si déjà au format international
-    if (cleaned.startsWith("+")) {
-      return cleaned;
-    }
-
-    return "+" + cleaned;
   }
 
   // 📋 LISTER ASSOCIATIONS DE L'UTILISATEUR
@@ -485,15 +442,13 @@ async createAssociation(req, res) {
           {
             model: Association,
             as: "association",
-            attributes: ['rolesConfiguration']
-          }
-        ]
+            attributes: ["rolesConfiguration"],
+          },
+        ],
       });
 
       // ✅ NOUVEAU : Vérifier avec isAdmin au lieu de rôle hardcodé
-      const canDelete =
-        membership?.isAdmin ||
-        req.user.role === "super_admin";
+      const canDelete = membership?.isAdmin || req.user.role === "super_admin";
 
       if (!canDelete) {
         return res.status(403).json({
@@ -823,6 +778,199 @@ async createAssociation(req, res) {
     }
   }
 
+
+  // 📋 OBTENIR DÉTAILS ASSOCIATION - VERSION RBAC COMPLÈTE
+async getAssociation(req, res) {
+  try {
+    const { id } = req.params;
+    const { includeMembers = false, includeFinances = false } = req.query;
+
+    // ✅ Charger membership avec champs RBAC explicites
+    const membership = await AssociationMember.findOne({
+      where: {
+        userId: req.user.id,
+        associationId: id,
+        status: "active",
+      },
+      attributes: [
+        'id',
+        'userId',
+        'associationId',
+        'sectionId',
+        'isAdmin',
+        'assignedRoles',        // ✅ JSONB - explicite
+        'customPermissions',    // ✅ JSONB - explicite
+        'memberType',
+        'status',
+        'joinDate',
+        'approvedDate',
+        'approvedBy',
+        'cotisationAmount',
+        'autoPaymentEnabled',
+        'paymentMethod',
+        'paymentMethodId',
+        'totalContributed',
+        'totalAidsReceived',
+        'lastContributionDate',
+        'contributionStatus',
+        'created_at',
+        'updated_at'
+      ],
+      include: [
+        {
+          model: Association,
+          as: "association",
+          attributes: ['rolesConfiguration']
+        }
+      ]
+    });
+
+    // Vérifier accès
+    if (!membership && req.user.role !== "super_admin") {
+      return res.status(403).json({
+        error: "Accès association non autorisé",
+        code: "ASSOCIATION_ACCESS_DENIED",
+      });
+    }
+
+    // ============================================
+    // CONSTRUIRE INCLUDES SELON PERMISSIONS
+    // ============================================
+    const includes = [
+      {
+        model: Section,
+        as: "sections",
+        attributes: ["id", "name", "country", "city", "membersCount"],
+      },
+    ];
+
+    // Inclure membres si demandé et autorisé
+    if (includeMembers === "true") {
+      const canViewMembers = membership?.isAdmin || 
+                             hasPermission(membership, "view_member_list") ||
+                             req.user.role === "super_admin";
+                             
+      if (canViewMembers) {
+        includes.push({
+          model: AssociationMember,
+          as: "memberships",
+          where: { status: 'active' },
+          required: false,
+          include: [
+            {
+              model: User,
+              as: "user",
+              attributes: [
+                "id",
+                "firstName",
+                "lastName",
+                "phoneNumber",
+                "profilePicture",
+              ],
+            },
+          ],
+        });
+      }
+    }
+
+    // ============================================
+    // CHARGER ASSOCIATION
+    // ============================================
+    const association = await Association.findByPk(id, { include: includes });
+
+    if (!association) {
+      return res.status(404).json({
+        error: "Association introuvable",
+        code: "ASSOCIATION_NOT_FOUND",
+      });
+    }
+
+    // Convertir en objet JSON
+    const response = association.toJSON();
+
+    // ============================================
+    // MASQUER INFOS SENSIBLES SELON PERMISSIONS
+    // ============================================
+    const canViewFinances = membership?.isAdmin ||
+                           hasPermission(membership, "view_finances") ||
+                           req.user.role === "super_admin";
+
+    if (!canViewFinances) {
+      delete response.totalBalance;
+      delete response.monthlyRevenue;
+      delete response.iban;
+    }
+
+    // ============================================
+    // FORMATER USER MEMBERSHIP
+    // ============================================
+    const userMembership = membership ? {
+      id: membership.id,
+      userId: membership.userId,
+      associationId: membership.associationId,
+      sectionId: membership.sectionId,
+      isAdmin: membership.isAdmin,
+      assignedRoles: membership.assignedRoles || [],           // ✅ Garantir tableau
+      customPermissions: membership.customPermissions || {      // ✅ Garantir objet
+        granted: [],
+        revoked: []
+      },
+      memberType: membership.memberType,
+      status: membership.status,
+      joinDate: membership.joinDate,
+      approvedDate: membership.approvedDate,
+      approvedBy: membership.approvedBy,
+      cotisationAmount: membership.cotisationAmount,
+      autoPaymentEnabled: membership.autoPaymentEnabled,
+      paymentMethod: membership.paymentMethod,
+      paymentMethodId: membership.paymentMethodId,
+      totalContributed: membership.totalContributed,
+      totalAidsReceived: membership.totalAidsReceived,
+      lastContributionDate: membership.lastContributionDate,
+      contributionStatus: membership.contributionStatus,
+      created_at: membership.created_at,
+      updated_at: membership.updated_at,
+      // ✅ Inclure association pour RBAC
+      association: membership.association ? {
+        rolesConfiguration: membership.association.rolesConfiguration
+      } : undefined
+    } : null;
+
+    // ============================================
+    // CALCULER PERMISSIONS EFFECTIVES
+    // ============================================
+    const effectivePermissions = membership ? 
+      getEffectivePermissions(membership) : 
+      [];
+
+    console.log('✅ getAssociation - userMembership:', {
+      userId: userMembership?.userId,
+      isAdmin: userMembership?.isAdmin,
+      assignedRoles: userMembership?.assignedRoles,
+      effectivePermissionsCount: effectivePermissions.length
+    });
+
+    // ============================================
+    // RÉPONSE
+    // ============================================
+    res.json({
+      success: true,
+      data: {
+        association: response,
+        userMembership: userMembership,
+        userPermissions: effectivePermissions,
+      },
+    });
+  } catch (error) {
+    console.error("❌ Erreur récupération association:", error);
+    res.status(500).json({
+      error: "Erreur récupération association",
+      code: "ASSOCIATION_FETCH_ERROR",
+      details: error.message,
+    });
+  }
+}
+
   // 📄 LISTER DOCUMENTS ASSOCIATION
   async getDocuments(req, res) {
     try {
@@ -849,6 +997,8 @@ async createAssociation(req, res) {
       });
     }
   }
+
+
 
   // 📄 TÉLÉCHARGER DOCUMENT SPÉCIFIQUE
   async downloadDocument(req, res) {
@@ -949,148 +1099,18 @@ async createAssociation(req, res) {
     }
   }
 
-  // 🔧 SETUP ASSOCIATION (traite firstName/lastName/phoneNumber)
-  async updateAssociationSetup(req, res) {
-    try {
-      const { id } = req.params;
-      const { bureauCentral, isMultiSection, firstSection } = req.body;
-
-      console.log("🔍 Données reçues:", {
-        bureauCentral,
-        isMultiSection,
-        firstSection,
-      });
-
-      // Récupérer l'association
-      const association = await Association.findByPk(id);
-      if (!association) {
-        return res.status(404).json({
-          error: "Association introuvable",
-          code: "ASSOCIATION_NOT_FOUND",
-        });
-      }
-
-      const updates = {};
-
-      // Traiter le bureau central avec le bon mapping de champ
-      if (bureauCentral) {
-        const processedBureau = {};
-
-        for (const [role, roleData] of Object.entries(bureauCentral)) {
-          if (
-            roleData &&
-            roleData.firstName &&
-            roleData.lastName &&
-            roleData.phoneNumber
-          ) {
-            // Créer un utilisateur temporaire ou rechercher existant
-            const { User } = require("../../../models");
-
-            // Chercher utilisateur existant par téléphone
-            let user = await User.findOne({
-              where: { phoneNumber: roleData.phoneNumber },
-            });
-
-            if (!user) {
-              // Créer utilisateur temporaire pour le bureau
-              user = await User.create({
-                phoneNumber: roleData.phoneNumber,
-                firstName: roleData.firstName,
-                lastName: roleData.lastName,
-                status: "pending_verification",
-              });
-            }
-
-            // Structurer le bureau avec la structure attendue
-            processedBureau[role] = {
-              userId: user.id,
-              name: `${user.firstName} ${user.lastName}`,
-              role: roleData.role,
-              phoneNumber: user.phoneNumber,
-              assignedAt: new Date(),
-            };
-          }
-        }
-
-        updates.centralBoard = processedBureau;
-        console.log("📝 Bureau à sauvegarder:", processedBureau);
-      }
-
-      // Traiter le type d'association
-      if (typeof isMultiSection === "boolean") {
-        updates.isMultiSection = isMultiSection;
-      }
-
-      // Traiter la première section si fournie
-      if (firstSection && isMultiSection) {
-        const { Section } = require("../../../models");
-        await Section.create({
-          associationId: id,
-          name: firstSection.name,
-          country: firstSection.country,
-          city: firstSection.city,
-          currency: firstSection.currency,
-          language: firstSection.language,
-        });
-      }
-
-      console.log("🔄 Updates à appliquer:", updates);
-
-      // Mettre à jour l'association
-      if (Object.keys(updates).length > 0) {
-        const [updatedRows] = await Association.update(updates, {
-          where: { id },
-          returning: true,
-        });
-
-        console.log("✅ Lignes mises à jour:", updatedRows);
-      }
-
-      // Vérification post-update
-      const updatedAssociation = await Association.findByPk(id);
-      console.log("🔍 Association après update:", {
-        id: updatedAssociation.id,
-        centralBoard: updatedAssociation.centralBoard,
-        isMultiSection: updatedAssociation.isMultiSection,
-      });
-
-      res.json({
-        success: true,
-        message: "Setup association terminé avec succès",
-        updated: Object.keys(updates),
-        debug: {
-          updatedFields: Object.keys(updates),
-          centralBoard: updatedAssociation.centralBoard,
-        },
-      });
-    } catch (error) {
-      console.error("❌ Erreur setup association:", error);
-      res.status(500).json({
-        error: "Erreur setup association",
-        details: error.message,
-        stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
-      });
-    }
-  }
-
   async updateConfiguration(req, res) {
     try {
       const { id: associationId } = req.params;
-      const {
-        memberTypes,
-        centralBoard,
-        accessRights,
-        cotisationSettings,
-        permissionsMatrix,
-      } = req.body;
+      const { memberTypes, customRoles, accessRights, cotisationSettings } =
+        req.body;
 
       console.log("🔧 Mise à jour configuration association:", {
         associationId,
         memberTypes: memberTypes?.length || 0,
-        centralBoard: Object.keys(centralBoard || {}).length,
+        customRoles: customRoles?.length || 0,
         accessRights: Object.keys(accessRights || {}).length,
         cotisationSettings: Object.keys(cotisationSettings || {}).length,
-        permissionsMatrix: Object.keys(permissionsMatrix || {}).length,
       });
 
       // Récupérer l'association
@@ -1113,12 +1133,12 @@ async createAssociation(req, res) {
           {
             model: Association,
             as: "association",
-            attributes: ['rolesConfiguration']
-          }
-        ]
+            attributes: ["rolesConfiguration"],
+          },
+        ],
       });
 
-      // ✅ NOUVEAU : Vérifier avec hasPermission au lieu de hard-code
+      // ✅ Vérifier permissions RBAC
       const canUpdate =
         req.user.role === "super_admin" ||
         membership?.isAdmin ||
@@ -1134,7 +1154,9 @@ async createAssociation(req, res) {
       // Préparer les données de mise à jour
       const updateData = {};
 
+      // ============================================
       // GESTION MEMBER TYPES
+      // ============================================
       if (memberTypes !== undefined) {
         if (!Array.isArray(memberTypes)) {
           return res.status(400).json({
@@ -1143,7 +1165,9 @@ async createAssociation(req, res) {
           });
         }
 
+        // Validation de chaque type
         for (const type of memberTypes) {
+          // Champs obligatoires
           if (
             !type.name ||
             !type.description ||
@@ -1151,39 +1175,120 @@ async createAssociation(req, res) {
           ) {
             return res.status(400).json({
               error:
-                "Chaque type de membre doit avoir un nom, une description et un montant de cotisation",
+                "Chaque type doit avoir: name, description, cotisationAmount",
               code: "INVALID_MEMBER_TYPE",
             });
           }
+
+          // ✅ Valider defaultRole (obligatoire)
+          if (!type.defaultRole) {
+            return res.status(400).json({
+              error: `Le type "${type.name}" doit avoir un rôle par défaut (defaultRole)`,
+              code: "MISSING_DEFAULT_ROLE",
+              hint: "Créez d'abord des rôles dans /settings/roles",
+              type: type.name,
+            });
+          }
+
+          // ✅ Vérifier que le rôle existe dans rolesConfiguration
+          const roleExists = association.rolesConfiguration?.roles?.find(
+            (r) => r.id === type.defaultRole
+          );
+
+          if (!roleExists) {
+            return res.status(400).json({
+              error: `Le rôle par défaut "${type.defaultRole}" n'existe pas pour le type "${type.name}"`,
+              code: "INVALID_DEFAULT_ROLE",
+              type: type.name,
+              roleId: type.defaultRole,
+              availableRoles:
+                association.rolesConfiguration?.roles?.map((r) => ({
+                  id: r.id,
+                  name: r.name,
+                })) || [],
+              hint: "Vérifiez que le rôle existe dans rolesConfiguration.roles",
+            });
+          }
+
+          console.log(
+            `✅ Type "${type.name}" → Rôle: ${roleExists.name} (${
+              roleExists.permissions?.length || 0
+            } permissions)`
+          );
         }
 
         updateData.memberTypes = memberTypes;
         console.log(
-          "✅ Types membres mis à jour:",
-          memberTypes.map((t) => t.name)
+          "✅ Types membres validés:",
+          memberTypes.map((t) => `${t.name} → ${t.defaultRole}`)
         );
       }
 
-      // GESTION CENTRAL BOARD
-      if (centralBoard !== undefined) {
-        if (typeof centralBoard !== "object") {
+      // ============================================
+      // GESTION CUSTOM ROLES (Rôles organisationnels)
+      // ============================================
+      if (customRoles !== undefined) {
+        if (!Array.isArray(customRoles)) {
           return res.status(400).json({
-            error: "centralBoard doit être un objet",
-            code: "INVALID_CENTRAL_BOARD_FORMAT",
+            error: "customRoles doit être un tableau",
+            code: "INVALID_CUSTOM_ROLES_FORMAT",
           });
         }
 
-        const currentBoard = association.centralBoard || {};
-        console.log("🔍 Bureau actuel en DB:", currentBoard);
-        console.log("📥 Bureau reçu du frontend:", centralBoard);
+        // Validation de chaque rôle organisationnel
+        for (const role of customRoles) {
+          if (!role.id || !role.name || !role.description) {
+            return res.status(400).json({
+              error: "Chaque rôle doit avoir: id, name, description",
+              code: "INVALID_CUSTOM_ROLE",
+            });
+          }
 
-        updateData.centralBoard = centralBoard;
+          // Vérifier assignedTo
+          if (role.assignedTo !== null && role.assignedTo !== undefined) {
+            if (typeof role.assignedTo !== "number") {
+              return res.status(400).json({
+                error: `assignedTo doit être un userId (number) ou null pour le rôle "${role.name}"`,
+                code: "INVALID_ASSIGNED_TO",
+                role: role.name,
+              });
+            }
 
-        console.log("💾 Bureau qui sera sauvegardé:", centralBoard);
-        console.log("✅ Bureau central mis à jour:", Object.keys(centralBoard));
+            // Vérifier que le membre existe
+            const memberExists = await AssociationMember.findOne({
+              where: {
+                userId: role.assignedTo,
+                associationId,
+                status: "active",
+              },
+            });
+
+            if (!memberExists) {
+              return res.status(400).json({
+                error: `Le membre (userId: ${role.assignedTo}) n'existe pas ou n'est pas actif`,
+                code: "MEMBER_NOT_FOUND",
+                role: role.name,
+                userId: role.assignedTo,
+              });
+            }
+          }
+        }
+
+        updateData.customRoles = customRoles;
+        console.log(
+          "✅ Rôles organisationnels mis à jour:",
+          customRoles.map(
+            (r) =>
+              `${r.name} ${
+                r.assignedTo ? `(assigné à ${r.assignedTo})` : "(libre)"
+              }`
+          )
+        );
       }
 
+      // ============================================
       // GESTION ACCESS RIGHTS
+      // ============================================
       if (accessRights !== undefined) {
         if (typeof accessRights !== "object") {
           return res.status(400).json({
@@ -1198,28 +1303,10 @@ async createAssociation(req, res) {
         updateData.accessRights = mergedRights;
         console.log("✅ Droits d'accès mis à jour:", Object.keys(mergedRights));
       }
-      
-      // GESTION PERMISSIONS MATRIX
-      if (permissionsMatrix !== undefined) {
-        if (typeof permissionsMatrix !== "object") {
-          return res.status(400).json({
-            error: "permissionsMatrix doit être un objet",
-            code: "INVALID_PERMISSIONS_MATRIX_FORMAT",
-          });
-        }
 
-        // ⚠️ NOTE : Cette section gère l'ANCIENNE permissionsMatrix
-        // Elle sera progressivement remplacée par rolesConfiguration
-        // Pour l'instant on la maintient pour compatibilité
-
-        updateData.permissionsMatrix = permissionsMatrix;
-        console.log(
-          "✅ Matrice de permissions mise à jour (legacy):",
-          Object.keys(permissionsMatrix)
-        );
-      }
-
+      // ============================================
       // GESTION COTISATION SETTINGS
+      // ============================================
       if (cotisationSettings !== undefined) {
         if (typeof cotisationSettings !== "object") {
           return res.status(400).json({
@@ -1238,7 +1325,9 @@ async createAssociation(req, res) {
         );
       }
 
-      // DEBUG : Log avant sauvegarde
+      // ============================================
+      // SAUVEGARDE
+      // ============================================
       console.log("💾 Données complètes à sauvegarder:", updateData);
 
       // Mettre à jour l'association
@@ -1247,18 +1336,27 @@ async createAssociation(req, res) {
         `🏛️ Configuration association ${associationId} mise à jour par utilisateur ${req.user.id}`
       );
 
-      // VÉRIFICATION : Relire depuis la DB pour confirmer
+      // ============================================
+      // VÉRIFICATION POST-UPDATE
+      // ============================================
       const verificationAssoc = await Association.findByPk(associationId);
+
       console.log(
-        "🔍 Vérification - Bureau sauvegardé en DB:",
-        verificationAssoc.centralBoard
+        "🔍 Vérification - Types membres sauvegardés:",
+        verificationAssoc.memberTypes?.map(
+          (t) => `${t.name} (${t.defaultRole})`
+        )
       );
       console.log(
-        "🔍 Vérification - Permissions sauvegardées en DB:",
-        verificationAssoc.permissionsMatrix
+        "🔍 Vérification - Rôles organisationnels:",
+        verificationAssoc.customRoles?.map(
+          (r) => `${r.name} ${r.assignedTo ? "(assigné)" : "(libre)"}`
+        )
       );
 
-      // Réponse avec toutes les données
+      // ============================================
+      // RÉPONSE
+      // ============================================
       res.json({
         success: true,
         message: "Configuration mise à jour avec succès",
@@ -1267,10 +1365,10 @@ async createAssociation(req, res) {
             id: verificationAssoc.id,
             name: verificationAssoc.name,
             memberTypes: verificationAssoc.memberTypes,
-            centralBoard: verificationAssoc.centralBoard,
+            customRoles: verificationAssoc.customRoles,
             accessRights: verificationAssoc.accessRights,
             cotisationSettings: verificationAssoc.cotisationSettings,
-            permissionsMatrix: verificationAssoc.permissionsMatrix,
+            rolesConfiguration: verificationAssoc.rolesConfiguration,
             updatedAt: verificationAssoc.updatedAt,
           },
         },
