@@ -117,9 +117,6 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.STRING,
         allowNull: false,
         defaultValue: "FR",
-        validate: {
-          len: [2, 2],
-        },
       },
 
       domiciliationCity: {

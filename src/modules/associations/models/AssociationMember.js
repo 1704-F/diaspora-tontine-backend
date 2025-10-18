@@ -248,7 +248,7 @@ module.exports = (sequelize, DataTypes) => {
     // 🏷️ TYPE & STATUT MEMBRE (CONFIGURABLE)
     memberType: {
       type: DataTypes.STRING(50),
-      allowNull: false,
+      allowNull: true,
       comment: 'Type membre configurable par association (ex: "actif", "fondateur", "ancien")'
     },
     

@@ -28,8 +28,8 @@ class AssociationController {
         name,
         description,
         legalStatus,
-        country,
-        city,
+        domiciliationCountry,
+        domiciliationCity,
         registrationNumber,
         memberTypes, // ✅ Optionnel, on fournit un défaut
         settings,
@@ -90,8 +90,8 @@ class AssociationController {
         slug,
         description,
         legalStatus,
-        country,
-        city,
+        domiciliationCountry,
+        domiciliationCity, 
         registrationNumber,
         memberTypes: defaultMemberTypes,
         customRoles: [], // ✅ Rôles organisationnels vides au départ

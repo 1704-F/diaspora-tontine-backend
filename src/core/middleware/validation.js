@@ -133,10 +133,10 @@ const validateCreateAssociation = [
     .isIn(['association_1901', 'asbl', 'nonprofit_501c3', 'other'])
     .withMessage('Statut légal invalide'),
     
-  body('country')
-    .isLength({ min: 2, max: 3 })
-    .isAlpha()
-    .withMessage('Code pays invalide (ISO)'),
+ body('domiciliationCountry')  // ✅ Bon nom de champ
+  .trim()
+  .isLength({ min: 2, max: 100 })  // ✅ Accepte noms complets
+  .withMessage('Pays requis'),
     
   body('description')
     .optional()
@@ -239,10 +239,10 @@ const validateCreateSection = [
     .isLength({ min: 3, max: 255 })
     .withMessage('Nom section: 3-255 caractères'),
     
-  body('country')
-    .isLength({ min: 2, max: 3 })
-    .isAlpha()
-    .withMessage('Code pays invalide'),
+body('domiciliationCountry')  // ✅ Bon nom de champ
+  .trim()
+  .isLength({ min: 2, max: 100 })  // ✅ Accepte noms complets
+  .withMessage('Pays requis'),
     
   body('currency')
     .isLength({ min: 3, max: 3 })
@@ -383,11 +383,33 @@ const validateSectionId = [
 
 // 📱 VALIDATION SPÉCIFIQUE DIASPORA
 const validateDiasporaData = [
-  body('country')
+  body('domiciliationCountry')  // ✅ Changé de 'country' → 'domiciliationCountry'
     .custom((country) => {
-      // Liste pays diaspora supportés
-      const supportedCountries = ['FR', 'IT', 'ES', 'BE', 'US', 'CA', 'SN', 'ML', 'TG', 'CI'];
-      if (!supportedCountries.includes(country)) {
+      // Liste pays diaspora supportés (noms complets)
+      const supportedCountries = [
+        'France', 'Italie', 'Espagne', 'Belgique', 
+        'États-Unis', 'Canada', 'Sénégal', 'Mali', 'Togo', 'Côte d\'Ivoire'
+      ];
+      
+      // Mapping codes ISO → noms pour compatibilité
+      const countryCodeToName = {
+        'FR': 'France',
+        'IT': 'Italie', 
+        'ES': 'Espagne',
+        'BE': 'Belgique',
+        'US': 'États-Unis',
+        'CA': 'Canada',
+        'SN': 'Sénégal',
+        'ML': 'Mali',
+        'TG': 'Togo',
+        'CI': 'Côte d\'Ivoire'
+      };
+      
+      // Accepter soit le nom complet, soit le code ISO
+      const isValid = supportedCountries.includes(country) || 
+                     Object.keys(countryCodeToName).includes(country);
+      
+      if (!isValid) {
         throw new Error(`Pays non supporté. Supportés: ${supportedCountries.join(', ')}`);
       }
       return true;
