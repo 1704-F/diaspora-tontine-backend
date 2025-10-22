@@ -17,18 +17,37 @@ const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 class MemberController {
   // 👥 AJOUTER MEMBRE À ASSOCIATION
    async addMember(req, res) {
-    try {
-      const { associationId } = req.params;
+  try {
+    const { associationId } = req.params;
 
-      console.log("--- DEBUG BACKEND ---");
-      console.log("req.body reçu:", req.body);
-      console.log("associationId:", associationId);
+    console.log("--- DEBUG BACKEND ---");
+    console.log("req.body reçu:", req.body);
+    console.log("associationId:", associationId);
 
-      const {
-        userId,
-        firstName,
-        lastName,
-        phoneNumber,
+    const {
+      userId,
+      firstName,
+      lastName,
+      phoneNumber,
+      email,
+      dateOfBirth,
+      gender,
+      address,
+      city,
+      country,
+      postalCode,
+      memberType,
+      sectionId,
+      cotisationAmount,
+      autoPaymentEnabled = false,
+      paymentMethodId,
+      assignedRoles = [], // ✅ NOUVEAU : Accepter les rôles
+      status = "active", // ✅ NOUVEAU : Accepter le statut
+    } = req.body;
+
+    console.log("Données extraites:", {
+      obligatoires: { userId, firstName, lastName, phoneNumber, memberType },
+      optionnelles: {
         email,
         dateOfBirth,
         gender,
@@ -36,224 +55,236 @@ class MemberController {
         city,
         country,
         postalCode,
-        memberType,
-        sectionId,
-        cotisationAmount,
-        autoPaymentEnabled = false,
-        paymentMethodId,
-      } = req.body;
+        assignedRoles, // ✅ Log des rôles
+      },
+    });
 
-      console.log("Données extraites:", {
-        obligatoires: { userId, firstName, lastName, phoneNumber, memberType },
-        optionnelles: {
-          email,
-          dateOfBirth,
-          gender,
-          address,
-          city,
-          country,
-          postalCode,
-        },
-      });
-
-      // Vérifier membership et permissions
-      const requesterMembership = await AssociationMember.findOne({
-        where: {
-          userId: req.user.id,
-          associationId,
-          status: "active",
-        },
-        include: [
-          {
-            model: Association,
-            as: "association",
-            attributes: ['rolesConfiguration']
-          }
-        ]
-      });
-
-      // ✅ NOUVEAU : Vérifier permissions avec RBAC moderne
-      const canAddMember =
-        requesterMembership?.isAdmin ||
-        hasPermission(requesterMembership, "manage_members") ||
-        req.user.role === "super_admin";
-
-      if (!canAddMember) {
-        return res.status(403).json({
-          error: "Permissions insuffisantes pour ajouter un membre",
-          code: "INSUFFICIENT_ADD_MEMBER_PERMISSIONS",
-          required: "manage_members",
-        });
-      }
-
-      // NOUVELLE LOGIQUE : Créer ou trouver l'utilisateur
-      let targetUser;
-
-      if (userId) {
-        targetUser = await User.findByPk(userId);
-        if (!targetUser) {
-          return res.status(404).json({
-            error: "Utilisateur introuvable",
-            code: "USER_NOT_FOUND",
-          });
-        }
-      } else if (firstName && lastName && phoneNumber) {
-        targetUser = await User.findOne({
-          where: { phoneNumber: phoneNumber.trim() },
-        });
-
-        if (!targetUser) {
-          targetUser = await User.create({
-            firstName: firstName.trim(),
-            lastName: lastName.trim(),
-            phoneNumber: phoneNumber.trim(),
-            email: email ? email.trim() : null,
-            dateOfBirth: dateOfBirth || null,
-            gender: gender || null,
-            address: address ? address.trim() : null,
-            city: city ? city.trim() : null,
-            country: country || "FR",
-            postalCode: postalCode ? postalCode.trim() : null,
-            status: "pending_verification",
-          });
-
-          console.log(`Nouvel utilisateur créé avec TOUTES les données:`, {
-            id: targetUser.id,
-            firstName: targetUser.firstName,
-            lastName: targetUser.lastName,
-            phoneNumber: targetUser.phoneNumber,
-            email: targetUser.email,
-            dateOfBirth: targetUser.dateOfBirth,
-            gender: targetUser.gender,
-            address: targetUser.address,
-            city: targetUser.city,
-            country: targetUser.country,
-            postalCode: targetUser.postalCode,
-          });
-        } else {
-          console.log(
-            `Utilisateur existant trouvé: ${targetUser.firstName} ${targetUser.lastName}`
-          );
-        }
-      } else {
-        return res.status(400).json({
-          error: "userId OU (firstName + lastName + phoneNumber) requis",
-          code: "MISSING_USER_DATA",
-        });
-      }
-
-      // Vérifier qu'il n'est pas déjà membre
-      const existingMembership = await AssociationMember.findOne({
-        where: {
-          userId: targetUser.id,
-          associationId,
-        },
-      });
-
-      if (existingMembership) {
-        return res.status(400).json({
-          error: "Utilisateur déjà membre de cette association",
-          code: "ALREADY_MEMBER",
-          currentStatus: existingMembership.status,
-        });
-      }
-
-      // Récupérer config association pour validation
-      const association = await Association.findByPk(associationId);
-      const memberTypesConfig = association.memberTypes || [];
-      const memberTypeExists = memberTypesConfig.find(
-        (type) => type.name === memberType
-      );
-
-      if (!memberTypeExists) {
-        return res.status(400).json({
-          error: "Type de membre invalide",
-          code: "INVALID_MEMBER_TYPE",
-          available: memberTypesConfig.map((type) => type.name),
-        });
-      }
-
-      // Si section spécifiée, vérifier qu'elle existe
-      if (sectionId) {
-        const section = await Section.findOne({
-          where: { id: sectionId, associationId },
-        });
-
-        if (!section) {
-          return res.status(404).json({
-            error: "Section introuvable",
-            code: "SECTION_NOT_FOUND",
-          });
-        }
-      }
-
-      // Déterminer montant cotisation
-      const finalCotisationAmount =
-        cotisationAmount || memberTypeExists.cotisationAmount;
-
-      // ✅ NOUVEAU : Créer membre avec RBAC moderne
-      const member = await AssociationMember.create({
-        userId: targetUser.id,
+    // Vérifier membership et permissions
+    const requesterMembership = await AssociationMember.findOne({
+      where: {
+        userId: req.user.id,
         associationId,
-        sectionId,
-        memberType,
         status: "active",
-        cotisationAmount: finalCotisationAmount,
-        autoPaymentEnabled,
-        paymentMethodId,
-        joinDate: new Date(),
-        approvedDate: new Date(),
-        approvedBy: req.user.id,
-        
-        // ✅ RBAC moderne
-        isAdmin: false, // Par défaut pas admin
-        assignedRoles: [], // Pas de rôles custom au départ
-        customPermissions: { granted: [], revoked: [] },
-      });
+      },
+      include: [
+        {
+          model: Association,
+          as: "association",
+          attributes: ["rolesConfiguration"],
+        },
+      ],
+    });
 
-      // Charger membre complet pour retour
-      const memberComplete = await AssociationMember.findByPk(member.id, {
-        include: [
-          {
-            model: User,
-            as: "user",
-            attributes: [
-              "id",
-              "firstName",
-              "lastName",
-              "phoneNumber",
-              "email",
-              "dateOfBirth",
-              "gender",
-              "address",
-              "city",
-              "country",
-              "postalCode",
-            ],
-          },
-          {
-            model: Section,
-            as: "section",
-            attributes: ["id", "name", "country"],
-          },
-          { model: Association, as: "association", attributes: ["id", "name"] },
-        ],
-      });
+    const canAddMember =
+      requesterMembership?.isAdmin ||
+      hasPermission(requesterMembership, "manage_members") ||
+      req.user.role === "super_admin";
 
-      res.status(201).json({
-        success: true,
-        message: "Membre ajouté avec succès",
-        data: { member: memberComplete },
-      });
-    } catch (error) {
-      console.error("Erreur ajout membre:", error);
-      res.status(500).json({
-        error: "Erreur ajout membre",
-        code: "ADD_MEMBER_ERROR",
-        details: error.message,
+    if (!canAddMember) {
+      return res.status(403).json({
+        error: "Permissions insuffisantes pour ajouter un membre",
+        code: "INSUFFICIENT_ADD_MEMBER_PERMISSIONS",
+        required: "manage_members",
       });
     }
+
+    // LOGIQUE CRÉATION/RÉCUPÉRATION UTILISATEUR (inchangée)
+    let targetUser;
+
+    if (userId) {
+      targetUser = await User.findByPk(userId);
+      if (!targetUser) {
+        return res.status(404).json({
+          error: "Utilisateur introuvable",
+          code: "USER_NOT_FOUND",
+        });
+      }
+    } else if (firstName && lastName && phoneNumber) {
+      targetUser = await User.findOne({
+        where: { phoneNumber: phoneNumber.trim() },
+      });
+
+      if (!targetUser) {
+        targetUser = await User.create({
+          firstName: firstName.trim(),
+          lastName: lastName.trim(),
+          phoneNumber: phoneNumber.trim(),
+          email: email ? email.trim() : null,
+          dateOfBirth: dateOfBirth || null,
+          gender: gender || null,
+          address: address ? address.trim() : null,
+          city: city ? city.trim() : null,
+          country: country || "FR",
+          postalCode: postalCode ? postalCode.trim() : null,
+          status: "pending_verification",
+        });
+
+        console.log(`Nouvel utilisateur créé avec TOUTES les données:`, {
+          id: targetUser.id,
+          firstName: targetUser.firstName,
+          lastName: targetUser.lastName,
+          phoneNumber: targetUser.phoneNumber,
+          email: targetUser.email,
+          dateOfBirth: targetUser.dateOfBirth,
+          gender: targetUser.gender,
+          address: targetUser.address,
+          city: targetUser.city,
+          country: targetUser.country,
+          postalCode: targetUser.postalCode,
+        });
+      } else {
+        console.log(
+          `Utilisateur existant trouvé: ${targetUser.firstName} ${targetUser.lastName}`
+        );
+      }
+    } else {
+      return res.status(400).json({
+        error: "userId OU (firstName + lastName + phoneNumber) requis",
+        code: "MISSING_USER_DATA",
+      });
+    }
+
+    // Vérifier qu'il n'est pas déjà membre
+    const existingMembership = await AssociationMember.findOne({
+      where: {
+        userId: targetUser.id,
+        associationId,
+      },
+    });
+
+    if (existingMembership) {
+      return res.status(400).json({
+        error: "Utilisateur déjà membre de cette association",
+        code: "ALREADY_MEMBER",
+        currentStatus: existingMembership.status,
+      });
+    }
+
+    // Récupérer config association pour validation
+    const association = await Association.findByPk(associationId);
+    const memberTypesConfig = association.memberTypes || [];
+    const memberTypeExists = memberTypesConfig.find(
+      (type) => type.name === memberType
+    );
+
+    if (!memberTypeExists) {
+      return res.status(400).json({
+        error: "Type de membre invalide",
+        code: "INVALID_MEMBER_TYPE",
+        available: memberTypesConfig.map((type) => type.name),
+      });
+    }
+
+    // Si section spécifiée, vérifier qu'elle existe
+    if (sectionId) {
+      const section = await Section.findOne({
+        where: { id: sectionId, associationId },
+      });
+
+      if (!section) {
+        return res.status(404).json({
+          error: "Section introuvable",
+          code: "SECTION_NOT_FOUND",
+        });
+      }
+    }
+
+    // ✅ NOUVEAU : Valider les rôles assignés
+    if (assignedRoles && assignedRoles.length > 0) {
+      const rolesConfig = association.rolesConfiguration?.roles || [];
+      const invalidRoles = assignedRoles.filter(
+        (roleId) => !rolesConfig.find((r) => r.id === roleId)
+      );
+
+      if (invalidRoles.length > 0) {
+        return res.status(400).json({
+          error: "Rôles invalides",
+          code: "INVALID_ROLES",
+          invalidRoles,
+          availableRoles: rolesConfig.map((r) => ({ id: r.id, name: r.name })),
+        });
+      }
+
+      console.log(
+        `✅ Rôles validés:`,
+        assignedRoles.map(
+          (roleId) => rolesConfig.find((r) => r.id === roleId)?.name
+        )
+      );
+    }
+
+    // Déterminer montant cotisation
+    const finalCotisationAmount =
+      cotisationAmount || memberTypeExists.cotisationAmount;
+
+    // ✅ MODIFIÉ : Créer membre avec assignedRoles
+    const member = await AssociationMember.create({
+      userId: targetUser.id,
+      associationId,
+      sectionId,
+      memberType,
+      status, // ✅ Utiliser le statut fourni
+      cotisationAmount: finalCotisationAmount,
+      autoPaymentEnabled,
+      paymentMethodId,
+      joinDate: new Date(),
+      approvedDate: status === "active" ? new Date() : null, // ✅ Approuver si actif
+      approvedBy: status === "active" ? req.user.id : null,
+
+      // ✅ RBAC moderne
+      isAdmin: false,
+      assignedRoles: assignedRoles || [], // ✅ MULTI-RÔLES
+      customPermissions: { granted: [], revoked: [] },
+    });
+
+    console.log(
+      `✅ Membre créé avec ${assignedRoles.length} rôle(s):`,
+      assignedRoles
+    );
+
+    // Charger membre complet pour retour
+    const memberComplete = await AssociationMember.findByPk(member.id, {
+      include: [
+        {
+          model: User,
+          as: "user",
+          attributes: [
+            "id",
+            "firstName",
+            "lastName",
+            "phoneNumber",
+            "email",
+            "dateOfBirth",
+            "gender",
+            "address",
+            "city",
+            "country",
+            "postalCode",
+          ],
+        },
+        {
+          model: Section,
+          as: "section",
+          attributes: ["id", "name", "country"],
+        },
+        { model: Association, as: "association", attributes: ["id", "name"] },
+      ],
+    });
+
+    res.status(201).json({
+      success: true,
+      message: "Membre ajouté avec succès",
+      data: { member: memberComplete },
+    });
+  } catch (error) {
+    console.error("Erreur ajout membre:", error);
+    res.status(500).json({
+      error: "Erreur ajout membre",
+      code: "ADD_MEMBER_ERROR",
+      details: error.message,
+    });
   }
+}
 
   async updateMember(req, res) {
     try {

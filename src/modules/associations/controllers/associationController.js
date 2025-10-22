@@ -1110,288 +1110,268 @@ async getAssociation(req, res) {
   }
 
   async updateConfiguration(req, res) {
-    try {
-      const { id: associationId } = req.params;
-      const { memberTypes, customRoles, accessRights, cotisationSettings } =
-        req.body;
+  try {
+    const { id: associationId } = req.params;
+    const { memberTypes, customRoles, accessRights, cotisationSettings } =
+      req.body;
 
-      console.log("🔧 Mise à jour configuration association:", {
-        associationId,
-        memberTypes: memberTypes?.length || 0,
-        customRoles: customRoles?.length || 0,
-        accessRights: Object.keys(accessRights || {}).length,
-        cotisationSettings: Object.keys(cotisationSettings || {}).length,
-      });
+    console.log("🔧 Mise à jour configuration association:", {
+      associationId,
+      memberTypes: memberTypes?.length || 0,
+      customRoles: customRoles?.length || 0,
+      accessRights: Object.keys(accessRights || {}).length,
+      cotisationSettings: Object.keys(cotisationSettings || {}).length,
+    });
 
-      // Récupérer l'association
-      const association = await Association.findByPk(associationId);
-      if (!association) {
-        return res.status(404).json({
-          error: "Association introuvable",
-          code: "ASSOCIATION_NOT_FOUND",
-        });
-      }
-
-      // Charger membership avec association pour RBAC
-      const membership = await AssociationMember.findOne({
-        where: {
-          userId: req.user.id,
-          associationId,
-          status: "active",
-        },
-        include: [
-          {
-            model: Association,
-            as: "association",
-            attributes: ["rolesConfiguration"],
-          },
-        ],
-      });
-
-      // ✅ Vérifier permissions RBAC
-      const canUpdate =
-        req.user.role === "super_admin" ||
-        membership?.isAdmin ||
-        hasPermission(membership, "modify_settings");
-
-      if (!canUpdate) {
-        return res.status(403).json({
-          error: "Permissions insuffisantes pour modifier la configuration",
-          code: "INSUFFICIENT_PERMISSIONS",
-        });
-      }
-
-      // Préparer les données de mise à jour
-      const updateData = {};
-
-      // ============================================
-      // GESTION MEMBER TYPES
-      // ============================================
-      if (memberTypes !== undefined) {
-        if (!Array.isArray(memberTypes)) {
-          return res.status(400).json({
-            error: "memberTypes doit être un tableau",
-            code: "INVALID_MEMBER_TYPES_FORMAT",
-          });
-        }
-
-        // Validation de chaque type
-        for (const type of memberTypes) {
-          // Champs obligatoires
-          if (
-            !type.name ||
-            !type.description ||
-            typeof type.cotisationAmount !== "number"
-          ) {
-            return res.status(400).json({
-              error:
-                "Chaque type doit avoir: name, description, cotisationAmount",
-              code: "INVALID_MEMBER_TYPE",
-            });
-          }
-
-          // ✅ Valider defaultRole (obligatoire)
-          if (!type.defaultRole) {
-            return res.status(400).json({
-              error: `Le type "${type.name}" doit avoir un rôle par défaut (defaultRole)`,
-              code: "MISSING_DEFAULT_ROLE",
-              hint: "Créez d'abord des rôles dans /settings/roles",
-              type: type.name,
-            });
-          }
-
-          // ✅ Vérifier que le rôle existe dans rolesConfiguration
-          const roleExists = association.rolesConfiguration?.roles?.find(
-            (r) => r.id === type.defaultRole
-          );
-
-          if (!roleExists) {
-            return res.status(400).json({
-              error: `Le rôle par défaut "${type.defaultRole}" n'existe pas pour le type "${type.name}"`,
-              code: "INVALID_DEFAULT_ROLE",
-              type: type.name,
-              roleId: type.defaultRole,
-              availableRoles:
-                association.rolesConfiguration?.roles?.map((r) => ({
-                  id: r.id,
-                  name: r.name,
-                })) || [],
-              hint: "Vérifiez que le rôle existe dans rolesConfiguration.roles",
-            });
-          }
-
-          console.log(
-            `✅ Type "${type.name}" → Rôle: ${roleExists.name} (${
-              roleExists.permissions?.length || 0
-            } permissions)`
-          );
-        }
-
-        updateData.memberTypes = memberTypes;
-        console.log(
-          "✅ Types membres validés:",
-          memberTypes.map((t) => `${t.name} → ${t.defaultRole}`)
-        );
-      }
-
-      // ============================================
-      // GESTION CUSTOM ROLES (Rôles organisationnels)
-      // ============================================
-      if (customRoles !== undefined) {
-        if (!Array.isArray(customRoles)) {
-          return res.status(400).json({
-            error: "customRoles doit être un tableau",
-            code: "INVALID_CUSTOM_ROLES_FORMAT",
-          });
-        }
-
-        // Validation de chaque rôle organisationnel
-        for (const role of customRoles) {
-          if (!role.id || !role.name || !role.description) {
-            return res.status(400).json({
-              error: "Chaque rôle doit avoir: id, name, description",
-              code: "INVALID_CUSTOM_ROLE",
-            });
-          }
-
-          // Vérifier assignedTo
-          if (role.assignedTo !== null && role.assignedTo !== undefined) {
-            if (typeof role.assignedTo !== "number") {
-              return res.status(400).json({
-                error: `assignedTo doit être un userId (number) ou null pour le rôle "${role.name}"`,
-                code: "INVALID_ASSIGNED_TO",
-                role: role.name,
-              });
-            }
-
-            // Vérifier que le membre existe
-            const memberExists = await AssociationMember.findOne({
-              where: {
-                userId: role.assignedTo,
-                associationId,
-                status: "active",
-              },
-            });
-
-            if (!memberExists) {
-              return res.status(400).json({
-                error: `Le membre (userId: ${role.assignedTo}) n'existe pas ou n'est pas actif`,
-                code: "MEMBER_NOT_FOUND",
-                role: role.name,
-                userId: role.assignedTo,
-              });
-            }
-          }
-        }
-
-        updateData.customRoles = customRoles;
-        console.log(
-          "✅ Rôles organisationnels mis à jour:",
-          customRoles.map(
-            (r) =>
-              `${r.name} ${
-                r.assignedTo ? `(assigné à ${r.assignedTo})` : "(libre)"
-              }`
-          )
-        );
-      }
-
-      // ============================================
-      // GESTION ACCESS RIGHTS
-      // ============================================
-      if (accessRights !== undefined) {
-        if (typeof accessRights !== "object") {
-          return res.status(400).json({
-            error: "accessRights doit être un objet",
-            code: "INVALID_ACCESS_RIGHTS_FORMAT",
-          });
-        }
-
-        const currentRights = association.accessRights || {};
-        const mergedRights = { ...currentRights, ...accessRights };
-
-        updateData.accessRights = mergedRights;
-        console.log("✅ Droits d'accès mis à jour:", Object.keys(mergedRights));
-      }
-
-      // ============================================
-      // GESTION COTISATION SETTINGS
-      // ============================================
-      if (cotisationSettings !== undefined) {
-        if (typeof cotisationSettings !== "object") {
-          return res.status(400).json({
-            error: "cotisationSettings doit être un objet",
-            code: "INVALID_COTISATION_SETTINGS_FORMAT",
-          });
-        }
-
-        const currentSettings = association.cotisationSettings || {};
-        const mergedSettings = { ...currentSettings, ...cotisationSettings };
-
-        updateData.cotisationSettings = mergedSettings;
-        console.log(
-          "✅ Paramètres cotisations mis à jour:",
-          Object.keys(mergedSettings)
-        );
-      }
-
-      // ============================================
-      // SAUVEGARDE
-      // ============================================
-      console.log("💾 Données complètes à sauvegarder:", updateData);
-
-      // Mettre à jour l'association
-      await association.update(updateData);
-      console.log(
-        `🏛️ Configuration association ${associationId} mise à jour par utilisateur ${req.user.id}`
-      );
-
-      // ============================================
-      // VÉRIFICATION POST-UPDATE
-      // ============================================
-      const verificationAssoc = await Association.findByPk(associationId);
-
-      console.log(
-        "🔍 Vérification - Types membres sauvegardés:",
-        verificationAssoc.memberTypes?.map(
-          (t) => `${t.name} (${t.defaultRole})`
-        )
-      );
-      console.log(
-        "🔍 Vérification - Rôles organisationnels:",
-        verificationAssoc.customRoles?.map(
-          (r) => `${r.name} ${r.assignedTo ? "(assigné)" : "(libre)"}`
-        )
-      );
-
-      // ============================================
-      // RÉPONSE
-      // ============================================
-      res.json({
-        success: true,
-        message: "Configuration mise à jour avec succès",
-        data: {
-          association: {
-            id: verificationAssoc.id,
-            name: verificationAssoc.name,
-            memberTypes: verificationAssoc.memberTypes,
-            customRoles: verificationAssoc.customRoles,
-            accessRights: verificationAssoc.accessRights,
-            cotisationSettings: verificationAssoc.cotisationSettings,
-            rolesConfiguration: verificationAssoc.rolesConfiguration,
-            updatedAt: verificationAssoc.updatedAt,
-          },
-        },
-      });
-    } catch (error) {
-      console.error("❌ Erreur mise à jour configuration:", error);
-      res.status(500).json({
-        error: "Erreur serveur lors de la mise à jour de la configuration",
-        code: "CONFIGURATION_UPDATE_ERROR",
-        details: error.message,
+    // Récupérer l'association
+    const association = await Association.findByPk(associationId);
+    if (!association) {
+      return res.status(404).json({
+        error: "Association introuvable",
+        code: "ASSOCIATION_NOT_FOUND",
       });
     }
+
+    // Charger membership avec association pour RBAC
+    const membership = await AssociationMember.findOne({
+      where: {
+        userId: req.user.id,
+        associationId,
+        status: "active",
+      },
+      include: [
+        {
+          model: Association,
+          as: "association",
+          attributes: ["rolesConfiguration"],
+        },
+      ],
+    });
+
+    // ✅ Vérifier permissions RBAC
+    const canUpdate =
+      req.user.role === "super_admin" ||
+      membership?.isAdmin ||
+      hasPermission(membership, "modify_settings");
+
+    if (!canUpdate) {
+      return res.status(403).json({
+        error: "Permissions insuffisantes pour modifier la configuration",
+        code: "INSUFFICIENT_PERMISSIONS",
+      });
+    }
+
+    // Préparer les données de mise à jour
+    const updateData = {};
+
+    // ============================================
+    // GESTION MEMBER TYPES
+    // ============================================
+    if (memberTypes !== undefined) {
+      if (!Array.isArray(memberTypes)) {
+        return res.status(400).json({
+          error: "memberTypes doit être un tableau",
+          code: "INVALID_MEMBER_TYPES_FORMAT",
+        });
+      }
+
+      // Validation de chaque type
+      for (const type of memberTypes) {
+        // Champs obligatoires
+        if (
+          !type.name ||
+          !type.description ||
+          typeof type.cotisationAmount !== "number"
+        ) {
+          return res.status(400).json({
+            error:
+              "Chaque type doit avoir: name, description, cotisationAmount",
+            code: "INVALID_MEMBER_TYPE",
+          });
+        }
+
+        // ✅ NOUVEAU : defaultRole n'est PLUS obligatoire
+        // Les rôles sont maintenant assignés au membre, pas au type
+        
+        // Validation montant cotisation
+        if (type.cotisationAmount < 0) {
+          return res.status(400).json({
+            error: `Le montant de cotisation doit être positif pour le type "${type.name}"`,
+            code: "INVALID_COTISATION_AMOUNT",
+            type: type.name,
+          });
+        }
+
+        console.log(`✅ Type "${type.name}" validé: ${type.cotisationAmount}€/mois`);
+      }
+
+      updateData.memberTypes = memberTypes;
+      console.log(
+        "✅ Types membres validés:",
+        memberTypes.map((t) => `${t.name} (${t.cotisationAmount}€)`)
+      );
+    }
+
+    // ============================================
+    // GESTION CUSTOM ROLES (Rôles organisationnels)
+    // ============================================
+    if (customRoles !== undefined) {
+      if (!Array.isArray(customRoles)) {
+        return res.status(400).json({
+          error: "customRoles doit être un tableau",
+          code: "INVALID_CUSTOM_ROLES_FORMAT",
+        });
+      }
+
+      // Validation de chaque rôle organisationnel
+      for (const role of customRoles) {
+        if (!role.id || !role.name || !role.description) {
+          return res.status(400).json({
+            error: "Chaque rôle doit avoir: id, name, description",
+            code: "INVALID_CUSTOM_ROLE",
+          });
+        }
+
+        // Vérifier assignedTo
+        if (role.assignedTo !== null && role.assignedTo !== undefined) {
+          if (typeof role.assignedTo !== "number") {
+            return res.status(400).json({
+              error: `assignedTo doit être un userId (number) ou null pour le rôle "${role.name}"`,
+              code: "INVALID_ASSIGNED_TO",
+              role: role.name,
+            });
+          }
+
+          // Vérifier que le membre existe
+          const memberExists = await AssociationMember.findOne({
+            where: {
+              userId: role.assignedTo,
+              associationId,
+              status: "active",
+            },
+          });
+
+          if (!memberExists) {
+            return res.status(400).json({
+              error: `Le membre (userId: ${role.assignedTo}) n'existe pas ou n'est pas actif`,
+              code: "MEMBER_NOT_FOUND",
+              role: role.name,
+              userId: role.assignedTo,
+            });
+          }
+        }
+      }
+
+      updateData.customRoles = customRoles;
+      console.log(
+        "✅ Rôles organisationnels mis à jour:",
+        customRoles.map(
+          (r) =>
+            `${r.name} ${
+              r.assignedTo ? `(assigné à ${r.assignedTo})` : "(libre)"
+            }`
+        )
+      );
+    }
+
+    // ============================================
+    // GESTION ACCESS RIGHTS
+    // ============================================
+    if (accessRights !== undefined) {
+      if (typeof accessRights !== "object") {
+        return res.status(400).json({
+          error: "accessRights doit être un objet",
+          code: "INVALID_ACCESS_RIGHTS_FORMAT",
+        });
+      }
+
+      const currentRights = association.accessRights || {};
+      const mergedRights = { ...currentRights, ...accessRights };
+
+      updateData.accessRights = mergedRights;
+      console.log("✅ Droits d'accès mis à jour:", Object.keys(mergedRights));
+    }
+
+    // ============================================
+    // GESTION COTISATION SETTINGS
+    // ============================================
+    if (cotisationSettings !== undefined) {
+      if (typeof cotisationSettings !== "object") {
+        return res.status(400).json({
+          error: "cotisationSettings doit être un objet",
+          code: "INVALID_COTISATION_SETTINGS_FORMAT",
+        });
+      }
+
+      const currentSettings = association.cotisationSettings || {};
+      const mergedSettings = { ...currentSettings, ...cotisationSettings };
+
+      updateData.cotisationSettings = mergedSettings;
+      console.log(
+        "✅ Paramètres cotisations mis à jour:",
+        Object.keys(mergedSettings)
+      );
+    }
+
+    // ============================================
+    // SAUVEGARDE
+    // ============================================
+    console.log("💾 Données complètes à sauvegarder:", updateData);
+
+    // Mettre à jour l'association
+    await association.update(updateData);
+    console.log(
+      `🏛️ Configuration association ${associationId} mise à jour par utilisateur ${req.user.id}`
+    );
+
+    // ============================================
+    // VÉRIFICATION POST-UPDATE
+    // ============================================
+    const verificationAssoc = await Association.findByPk(associationId);
+
+    console.log(
+      "🔍 Vérification - Types membres sauvegardés:",
+      verificationAssoc.memberTypes?.map(
+        (t) => `${t.name} (${t.cotisationAmount}€)`
+      )
+    );
+    console.log(
+      "🔍 Vérification - Rôles organisationnels:",
+      verificationAssoc.customRoles?.map(
+        (r) => `${r.name} ${r.assignedTo ? "(assigné)" : "(libre)"}`
+      )
+    );
+
+    // ============================================
+    // RÉPONSE
+    // ============================================
+    res.json({
+      success: true,
+      message: "Configuration mise à jour avec succès",
+      data: {
+        association: {
+          id: verificationAssoc.id,
+          name: verificationAssoc.name,
+          memberTypes: verificationAssoc.memberTypes,
+          customRoles: verificationAssoc.customRoles,
+          accessRights: verificationAssoc.accessRights,
+          cotisationSettings: verificationAssoc.cotisationSettings,
+          rolesConfiguration: verificationAssoc.rolesConfiguration,
+          updatedAt: verificationAssoc.updatedAt,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("❌ Erreur mise à jour configuration:", error);
+    res.status(500).json({
+      error: "Erreur serveur lors de la mise à jour de la configuration",
+      code: "CONFIGURATION_UPDATE_ERROR",
+      details: error.message,
+    });
   }
+}
+
+
 }
 
 module.exports = new AssociationController();
