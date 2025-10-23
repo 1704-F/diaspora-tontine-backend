@@ -63,6 +63,7 @@ module.exports = (sequelize, DataTypes) => {
         autoIncrement: true,
       },
 
+
       // 🏢 INFORMATIONS DE BASE
       name: {
         type: DataTypes.STRING,
@@ -150,11 +151,12 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.JSONB,
         allowNull: false,
         defaultValue: {
-          version: '1.0',
+          version: "1.0",
           roles: [],
-          availablePermissions: []
+          availablePermissions: [],
         },
-        comment: 'Configuration complète des rôles et permissions (RBAC dynamique)'
+        comment:
+          "Configuration complète des rôles et permissions (RBAC dynamique)",
       },
 
       // ⚙️ CONFIGURATION FLEXIBLE
@@ -336,51 +338,167 @@ module.exports = (sequelize, DataTypes) => {
           }
 
           // ✅ NOUVEAU : Initialiser rolesConfiguration avec permissions de base
-          if (!association.rolesConfiguration || 
-              !association.rolesConfiguration.availablePermissions ||
-              association.rolesConfiguration.availablePermissions.length === 0) {
-            
+          if (
+            !association.rolesConfiguration ||
+            !association.rolesConfiguration.availablePermissions ||
+            association.rolesConfiguration.availablePermissions.length === 0
+          ) {
             association.rolesConfiguration = {
-              version: '1.0',
+              version: "1.0",
               roles: [], // Vide - admin créera les rôles
               availablePermissions: [
                 // 📊 FINANCES
-                { id: 'view_finances', name: 'Consulter les finances', category: 'finances', description: 'Voir soldes, transactions, rapports' },
-                { id: 'validate_expenses', name: 'Valider les dépenses', category: 'finances', description: 'Approuver/rejeter demandes de dépenses' },
-                { id: 'export_financial_data', name: 'Exporter données financières', category: 'finances', description: 'Télécharger rapports CSV, Excel' },
-                { id: 'manage_transactions', name: 'Gérer les transactions', category: 'finances', description: 'Créer, modifier, annuler transactions' },
-                { id: 'manage_cotisations', name: 'Gérer les cotisations', category: 'finances', description: 'Créer, modifier, importer cotisations' },
-                { id: 'view_balance', name: 'Consulter les soldes', category: 'finances', description: 'Voir solde association et sections' },
-                
+                {
+                  id: "view_finances",
+                  name: "Consulter les finances",
+                  category: "finances",
+                  description: "Voir soldes, transactions, rapports",
+                },
+                {
+                  id: "validate_expenses",
+                  name: "Valider les dépenses",
+                  category: "finances",
+                  description: "Approuver/rejeter demandes de dépenses",
+                },
+                {
+                  id: "export_financial_data",
+                  name: "Exporter données financières",
+                  category: "finances",
+                  description: "Télécharger rapports CSV, Excel",
+                },
+                {
+                  id: "manage_transactions",
+                  name: "Gérer les transactions",
+                  category: "finances",
+                  description: "Créer, modifier, annuler transactions",
+                },
+                {
+                  id: "manage_cotisations",
+                  name: "Gérer les cotisations",
+                  category: "finances",
+                  description: "Créer, modifier, importer cotisations",
+                },
+                {
+                  id: "view_balance",
+                  name: "Consulter les soldes",
+                  category: "finances",
+                  description: "Voir solde association et sections",
+                },
+
                 // 👥 MEMBRES
-                { id: 'manage_members', name: 'Gérer les membres', category: 'membres', description: 'Ajouter, modifier, supprimer membres' },
-                { id: 'view_members', name: 'Consulter les membres', category: 'membres', description: 'Voir liste et détails membres' },
-                { id: 'assign_roles', name: 'Attribuer des rôles', category: 'membres', description: 'Changer les rôles des membres' },
-                { id: 'manage_cotisations', name: 'Gérer les cotisations', category: 'membres', description: 'Modifier montants cotisations' },
-                
+                {
+                  id: "manage_members",
+                  name: "Gérer les membres",
+                  category: "membres",
+                  description: "Ajouter, modifier, supprimer membres",
+                },
+                {
+                  id: "view_members",
+                  name: "Consulter les membres",
+                  category: "membres",
+                  description: "Voir liste et détails membres",
+                },
+                {
+                  id: "assign_roles",
+                  name: "Attribuer des rôles",
+                  category: "membres",
+                  description: "Changer les rôles des membres",
+                },
+                {
+                  id: "manage_cotisations",
+                  name: "Gérer les cotisations",
+                  category: "membres",
+                  description: "Modifier montants cotisations",
+                },
+
                 // 🏗️ SECTIONS
-                { id: 'manage_sections', name: 'Gérer les sections', category: 'sections', description: 'Créer, modifier, supprimer sections' },
-                { id: 'view_sections', name: 'Consulter les sections', category: 'sections', description: 'Voir détails des sections' },
-                
+                {
+                  id: "manage_sections",
+                  name: "Gérer les sections",
+                  category: "sections",
+                  description: "Créer, modifier, supprimer sections",
+                },
+                {
+                  id: "view_sections",
+                  name: "Consulter les sections",
+                  category: "sections",
+                  description: "Voir détails des sections",
+                },
+
                 // 📢 COMMUNICATION
-                { id: 'send_notifications', name: 'Envoyer des notifications', category: 'communication', description: 'SMS, emails aux membres' },
-                { id: 'manage_announcements', name: 'Gérer les annonces', category: 'communication', description: 'Publier communications' },
-                
+                {
+                  id: "send_notifications",
+                  name: "Envoyer des notifications",
+                  category: "communication",
+                  description: "SMS, emails aux membres",
+                },
+                {
+                  id: "manage_announcements",
+                  name: "Gérer les annonces",
+                  category: "communication",
+                  description: "Publier communications",
+                },
+
                 // 📄 DOCUMENTS
-                { id: 'view_documents', name: 'Consulter les documents', category: 'documents', description: 'Accéder aux documents' },
-                { id: 'upload_documents', name: 'Téléverser des documents', category: 'documents', description: 'Ajouter nouveaux documents' },
-                { id: 'manage_documents', name: 'Gérer les documents', category: 'documents', description: 'Modifier, supprimer documents' },
-                
+                {
+                  id: "view_documents",
+                  name: "Consulter les documents",
+                  category: "documents",
+                  description: "Accéder aux documents",
+                },
+                {
+                  id: "upload_documents",
+                  name: "Téléverser des documents",
+                  category: "documents",
+                  description: "Ajouter nouveaux documents",
+                },
+                {
+                  id: "manage_documents",
+                  name: "Gérer les documents",
+                  category: "documents",
+                  description: "Modifier, supprimer documents",
+                },
+
                 // 📅 ÉVÉNEMENTS
-                { id: 'manage_events', name: 'Gérer les événements', category: 'evenements', description: 'Créer, modifier événements' },
-                { id: 'view_events', name: 'Consulter les événements', category: 'evenements', description: 'Voir calendrier événements' },
-                
+                {
+                  id: "manage_events",
+                  name: "Gérer les événements",
+                  category: "evenements",
+                  description: "Créer, modifier événements",
+                },
+                {
+                  id: "view_events",
+                  name: "Consulter les événements",
+                  category: "evenements",
+                  description: "Voir calendrier événements",
+                },
+
                 // ⚙️ ADMINISTRATION
-                { id: 'modify_settings', name: 'Modifier les paramètres', category: 'administration', description: 'Changer configuration association' },
-                { id: 'manage_roles', name: 'Gérer les rôles', category: 'administration', description: 'Créer, modifier, supprimer rôles' },
-                { id: 'export_data', name: 'Exporter toutes les données', category: 'administration', description: 'Export complet sauvegarde' },
-                { id: 'view_audit_logs', name: 'Consulter les logs', category: 'administration', description: 'Voir historique actions' }
-              ]
+                {
+                  id: "modify_settings",
+                  name: "Modifier les paramètres",
+                  category: "administration",
+                  description: "Changer configuration association",
+                },
+                {
+                  id: "manage_roles",
+                  name: "Gérer les rôles",
+                  category: "administration",
+                  description: "Créer, modifier, supprimer rôles",
+                },
+                {
+                  id: "export_data",
+                  name: "Exporter toutes les données",
+                  category: "administration",
+                  description: "Export complet sauvegarde",
+                },
+                {
+                  id: "view_audit_logs",
+                  name: "Consulter les logs",
+                  category: "administration",
+                  description: "Voir historique actions",
+                },
+              ],
             };
           }
         },
