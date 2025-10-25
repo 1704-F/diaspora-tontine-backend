@@ -228,6 +228,13 @@ module.exports = (sequelize, DataTypes) => {
       defaultValue: false,
       comment: 'Admin de l\'association (créateur qui peut gérer rôles et paramètres)'
     },
+
+    isMemberOfAssociation: {
+  type: DataTypes.BOOLEAN,
+  allowNull: false,
+  defaultValue: true,
+  comment: 'Si false, c\'est un admin externe (gestionnaire) qui n\'apparaît PAS dans les membres'
+},
     
     // 🎯 SYSTÈME RBAC - Rôles attribués
     assignedRoles: {

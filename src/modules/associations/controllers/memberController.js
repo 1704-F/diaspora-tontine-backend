@@ -146,11 +146,68 @@ class MemberController {
 
     // Vérifier qu'il n'est pas déjà membre
     const existingMembership = await AssociationMember.findOne({
-      where: {
-        userId: targetUser.id,
-        associationId,
-      },
+  where: {
+    userId: targetUser.id,
+    associationId,
+  },
+});
+
+if (existingMembership) {
+  // ✅ CAS SPÉCIAL : Admin externe qui devient membre interne
+  if (existingMembership.isAdmin && !existingMembership.isMemberOfAssociation) {
+    console.log(`🔄 Mise à jour admin externe → membre interne`);
+    
+    await existingMembership.update({
+      memberType,
+      assignedRoles: assignedRoles || [],
+      cotisationAmount: cotisationAmount || 0,
+      isMemberOfAssociation: true, // ✅ Devient membre réel
+      approvedDate: status === "active" ? new Date() : null,
+      approvedBy: status === "active" ? req.user.id : null,
     });
+
+    // Charger membre complet pour retour
+    const memberComplete = await AssociationMember.findByPk(existingMembership.id, {
+      include: [
+        {
+          model: User,
+          as: "user",
+          attributes: [
+            "id",
+            "firstName",
+            "lastName",
+            "phoneNumber",
+            "email",
+            "dateOfBirth",
+            "gender",
+            "address",
+            "city",
+            "country",
+            "postalCode",
+          ],
+        },
+        {
+          model: Section,
+          as: "section",
+          attributes: ["id", "name", "country"],
+        },
+        { model: Association, as: "association", attributes: ["id", "name"] },
+      ],
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Admin converti en membre interne avec succès",
+      data: { member: memberComplete },
+    });
+  }
+
+  // ❌ Sinon, c'est vraiment un doublon
+  return res.status(400).json({
+    error: "Cet utilisateur est déjà membre de l'association",
+    code: "ALREADY_MEMBER",
+  });
+}
 
     if (existingMembership) {
       return res.status(400).json({
@@ -607,11 +664,14 @@ class MemberController {
 
       // Le middleware checkPermission('view_members') gère déjà les permissions !
 
-      // Construire filtres
-      const whereClause = { associationId };
-      if (sectionId) whereClause.sectionId = sectionId;
-      if (memberType) whereClause.memberType = memberType;
-      if (status !== "all") whereClause.status = status;
+     // Construire filtres
+const whereClause = { 
+  associationId,
+  isMemberOfAssociation: true, // ✅ Exclure les admins externes (gestionnaires)
+};
+if (sectionId) whereClause.sectionId = sectionId;
+if (memberType) whereClause.memberType = memberType;
+if (status !== "all") whereClause.status = status;
 
       // Pagination
       const offset = (page - 1) * limit;

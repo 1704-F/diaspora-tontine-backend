@@ -125,18 +125,20 @@ class AssociationController {
     });
 
     // Créer membership admin
-    await AssociationMember.create({
-      userId: req.user.id,
-      associationId: association.id,
-      memberType: null,
-      status: "active",
-      isAdmin: true,
-      assignedRoles: [],
-      customPermissions: { granted: [], revoked: [] },
-      joinDate: new Date(),
-      approvedDate: new Date(),
-      approvedBy: req.user.id,
-    });
+  // Si l'admin est INTERNE (membre), le frontend mettra à jour ce membership
+const adminMembership = await AssociationMember.create({
+  userId: req.user.id,
+  associationId: association.id,
+  memberType: null, // Sera renseigné si admin interne
+  isAdmin: true,
+  status: "active",
+  assignedRoles: [], // Sera renseigné si admin interne
+  customPermissions: { granted: [], revoked: [] },
+  isMemberOfAssociation: false, // ✅ Par défaut EXTERNE (gestionnaire uniquement)
+  cotisationAmount: 0, // Pas de cotisation pour admin externe
+});
+
+console.log(`✅ Membership admin créé (ID: ${adminMembership.id}) - Gestionnaire externe par défaut`);
 
     // Charger association complète
     const associationComplete = await Association.findByPk(association.id, {
