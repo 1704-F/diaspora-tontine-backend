@@ -175,16 +175,6 @@ router.put(
   sectionController.updateSection
 );
 
-// Mettre à jour bureau section
-// ✅ MIGRÉ: admin/central_board → manage_sections
-router.put(
-  "/:associationId/sections/:sectionId/bureau",
-  authenticate,
-  validateAssociationId,
-  checkAssociationMember,
-  checkPermission("manage_sections"),
-  sectionController.updateBureauSection
-);
 
 // Statistiques section
 // ✅ MIGRÉ: member → checkAssociationMember seulement

@@ -1,3 +1,4 @@
+// src/modules/associations/models/Section.js
 'use strict';
 const { Model } = require('sequelize');
 
@@ -58,10 +59,70 @@ module.exports = (sequelize, DataTypes) => {
       return parseFloat(result?.total || 0);
     }
 
-    // Vérifier si bureau section est complet
-    hasBureauComplete() {
-      const bureau = this.bureauSection || {};
-      return !!(bureau.responsable && bureau.secretaire && bureau.tresorier);
+    // ✅ NOUVEAU - Récupérer les membres avec un rôle spécifique
+    async getMembersWithRole(roleKey) {
+      const { AssociationMember, Role, User } = sequelize.models;
+      
+      return await AssociationMember.findAll({
+        where: { sectionId: this.id, status: 'active' },
+        include: [
+          {
+            model: User,
+            as: 'user',
+            attributes: ['id', 'firstName', 'lastName', 'phoneNumber', 'email']
+          },
+          {
+            model: Role,
+            as: 'roles',
+            where: { key: roleKey },
+            through: { attributes: [] },
+            required: true
+          }
+        ]
+      });
+    }
+
+    // ✅ NOUVEAU - Vérifier si la section a des membres avec permissions spécifiques
+    async hasAdminMembers() {
+      const { AssociationMember, Role } = sequelize.models;
+      
+      const count = await AssociationMember.count({
+        where: { sectionId: this.id, status: 'active' },
+        include: [{
+          model: Role,
+          as: 'roles',
+          where: {
+            permissions: {
+              [sequelize.Sequelize.Op.contains]: ['manage_section']
+            }
+          },
+          through: { attributes: [] },
+          required: true
+        }]
+      });
+      
+      return count > 0;
+    }
+
+    // ✅ NOUVEAU - Récupérer tous les membres de la section avec leurs rôles
+    async getMembersWithRoles() {
+      const { AssociationMember, Role, User } = sequelize.models;
+      
+      return await AssociationMember.findAll({
+        where: { sectionId: this.id },
+        include: [
+          {
+            model: User,
+            as: 'user',
+            attributes: ['id', 'firstName', 'lastName', 'phoneNumber', 'email']
+          },
+          {
+            model: Role,
+            as: 'roles',
+            through: { attributes: [] }
+          }
+        ]
+      });
     }
   }
 
@@ -128,12 +189,8 @@ module.exports = (sequelize, DataTypes) => {
       comment: 'Montants cotisations par type membre (JSON configurable)'
     },
     
-    // 🏛️ BUREAU SECTION
-    bureauSection: {
-      type: DataTypes.JSON,
-      allowNull: true,
-      comment: 'Membres du bureau section: responsable, secrétaire, trésorier'
-    },
+    // ❌ SUPPRIMÉ - bureauSection remplacé par système RBAC
+    // Les membres du bureau sont gérés via AssociationMember + Role + permissions
     
     // 🌐 LOCALISATION
     language: {

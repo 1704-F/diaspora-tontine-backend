@@ -623,7 +623,7 @@ console.log(`✅ Membership admin créé (ID: ${adminMembership.id}) - Gestionna
           "country",
           "city",
           "membersCount",
-          "createdAt",
+          "created_at",
         ],
         include: [
           {
@@ -636,7 +636,7 @@ console.log(`✅ Membership admin créé (ID: ${adminMembership.id}) - Gestionna
         offset: parseInt(offset),
         order: [
           ["membersCount", "DESC"],
-          ["createdAt", "DESC"],
+          ["created_at", "DESC"],
         ],
       });
 
@@ -1182,16 +1182,16 @@ async getAssociation(req, res) {
         // Champs obligatoires
         if (
           !type.name ||
-          !type.description ||
           typeof type.cotisationAmount !== "number"
         ) {
           return res.status(400).json({
             error:
-              "Chaque type doit avoir: name, description, cotisationAmount",
+              "Chaque type doit avoir: name, cotisationAmount",
             code: "INVALID_MEMBER_TYPE",
           });
         }
 
+        // ✅ Description optionnelle (peut être vide)
         // ✅ NOUVEAU : defaultRole n'est PLUS obligatoire
         // Les rôles sont maintenant assignés au membre, pas au type
         

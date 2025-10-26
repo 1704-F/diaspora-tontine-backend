@@ -11,66 +11,8 @@ const { Op } = require("sequelize");
 // ✅ NOUVEAU : Import système RBAC moderne
 const { hasPermission, getEffectivePermissions } = require('../../../core/middleware/checkPermission');
 
-// Ajouter cette fonction AVANT la classe SectionController
-async function updateMemberRoles(associationId, sectionId, newBureau) {
-  try {
-    console.log('Mise à jour des rôles membres...');
-    
-    const members = await AssociationMember.findAll({
-      where: { associationId, sectionId }
-    });
-
-    console.log(`Trouvé ${members.length} membres à mettre à jour`);
-
-    // Réinitialiser tous les rôles bureau de la section
-    for (const member of members) {
-      let roles = member.roles || [];
-      
-      const oldRolesCount = roles.length;
-      roles = roles.filter(role => 
-        !['responsable_section', 'secretaire_section', 'tresorier_section'].includes(role)
-      );
-      
-      if (oldRolesCount !== roles.length) {
-        console.log(`Suppression rôles section pour membre ${member.userId}`);
-        await member.update({ roles });
-      }
-    }
-
-    // Assigner nouveaux rôles
-    const assignments = [
-      { role: "responsable_section", userId: newBureau.responsable?.userId },
-      { role: "secretaire_section", userId: newBureau.secretaire?.userId },
-      { role: "tresorier_section", userId: newBureau.tresorier?.userId },
-    ];
-
-    for (const assignment of assignments) {
-      if (assignment.userId) {
-        console.log(`Assignation rôle ${assignment.role} à user ${assignment.userId}`);
-        
-        const member = await AssociationMember.findOne({
-          where: { userId: assignment.userId, associationId, sectionId }
-        });
-        
-        if (member) {
-          const roles = [...(member.roles || [])];
-          if (!roles.includes(assignment.role)) {
-            roles.push(assignment.role);
-            await member.update({ roles });
-            console.log(`Rôle ${assignment.role} assigné avec succès`);
-          }
-        } else {
-          console.warn(`Membre ${assignment.userId} non trouvé dans la section ${sectionId}`);
-        }
-      }
-    }
-
-    console.log('Mise à jour des rôles terminée avec succès');
-  } catch (error) {
-    console.error("Erreur mise à jour rôles membres:", error);
-    throw error;
-  }
-}
+// ❌ SUPPRIMÉ - updateMemberRoles() - Remplacé par système RBAC
+// Les rôles sont maintenant gérés via AssociationMember.roles
 
 class SectionController {
   // 🏗️ CRÉER SECTION
@@ -89,7 +31,7 @@ class SectionController {
         contactPhone,
         contactEmail,
         cotisationRates,
-        bureauSection,
+        // ❌ SUPPRIMÉ - bureauSection n'est plus accepté
       } = req.body;
 
       // Vérifier que l'association existe et permissions
@@ -151,14 +93,12 @@ class SectionController {
         contactPhone,
         contactEmail,
         cotisationRates: cotisationRates || {},
-        bureauSection: bureauSection || {},
+        // ❌ SUPPRIMÉ - bureauSection
         foundedDate: new Date(),
       });
 
-      // Si bureau section fourni, créer les relations membres
-      if (bureauSection && Object.keys(bureauSection).length > 0) {
-        await this.assignBureauSection(section.id, bureauSection);
-      }
+      // ❌ SUPPRIMÉ - Plus d'assignation de bureau section
+      // Les membres du bureau sont gérés via les rôles RBAC
 
       res.status(201).json({
         success: true,
@@ -235,7 +175,7 @@ class SectionController {
               stats: {
                 membersCount,
                 monthlyRevenue,
-                bureauComplete: section.hasBureauComplete(),
+                // ❌ SUPPRIMÉ - bureauComplete (plus de notion de "bureau complet")
               },
             };
           })
@@ -340,85 +280,9 @@ class SectionController {
     }
   }
 
-  // 👥 ASSIGNER BUREAU SECTION
-  async updateBureauSection(req, res) {
-    try {
-      const { associationId, sectionId } = req.params;
-      const { bureauSection } = req.body;
-
-      console.log('Données reçues:', { bureauSection });
-
-      // Vérifier permissions
-      const membership = await AssociationMember.findOne({
-        where: {
-          userId: req.user.id,
-          associationId,
-          status: "active",
-        },
-        include: [
-          {
-            model: Association,
-            as: "association",
-            attributes: ['rolesConfiguration']
-          }
-        ]
-      });
-
-      // ✅ NOUVEAU : Vérifier permissions avec RBAC moderne
-      const canManageBureau =
-        membership?.isAdmin ||
-        hasPermission(membership, "manage_sections") ||
-        req.user.role === "super_admin";
-
-      if (!canManageBureau) {
-        return res.status(403).json({
-          error: "Permissions insuffisantes pour gérer le bureau section",
-          code: "INSUFFICIENT_PERMISSIONS",
-          required: "manage_sections",
-        });
-      }
-
-      // Récupérer la section
-      const section = await Section.findOne({
-        where: { id: sectionId, associationId }
-      });
-
-      if (!section) {
-        return res.status(404).json({
-          error: "Section introuvable",
-          code: "SECTION_NOT_FOUND",
-        });
-      }
-
-      // Mettre à jour le bureau section
-      await section.update({
-        bureauSection: {
-          ...bureauSection,
-          updatedAt: new Date(),
-          updatedBy: req.user.id
-        }
-      });
-
-      // Récupérer la section mise à jour
-      const updatedSection = await Section.findByPk(sectionId);
-
-      res.json({
-        success: true,
-        message: "Bureau section mis à jour avec succès",
-        data: { 
-          bureau: updatedSection.bureauSection 
-        },
-      });
-
-    } catch (error) {
-      console.error("Erreur mise à jour bureau section:", error);
-      res.status(500).json({
-        error: "Erreur mise à jour bureau section",
-        code: "BUREAU_UPDATE_ERROR",
-        details: error.message,
-      });
-    }
-  }
+  // ❌ SUPPRIMÉ - updateBureauSection()
+  // Les rôles de section sont gérés via les endpoints membres + rôles
+  // Utiliser : PUT /associations/:id/members/:memberId/roles
 
   // 📊 STATISTIQUES SECTION
   async getSectionStats(req, res) {
@@ -502,10 +366,7 @@ class SectionController {
               totalTransactions,
               averageCotisation: parseFloat(averageCotisation?.average || 0),
             },
-            bureau: {
-              isComplete: section.hasBureauComplete(),
-              roles: section.bureauSection || {},
-            },
+            // ❌ SUPPRIMÉ - bureau (plus de notion de "bureau complet")
           },
           lastUpdated: new Date(),
         },
@@ -723,33 +584,8 @@ class SectionController {
     }
   }
 
-  // 🔧 UTILITAIRES PRIVÉES
-  async assignBureauSection(sectionId, bureauSection) {
-    try {
-      const roles = ["responsable", "secretaire", "tresorier"];
-
-      for (const role of roles) {
-        const assignment = bureauSection[role];
-        if (assignment && assignment.userId) {
-          await AssociationMember.update(
-            {
-              roles: [role + "_section"],
-              lastActiveDate: new Date(),
-            },
-            {
-              where: {
-                userId: assignment.userId,
-                sectionId,
-              },
-            }
-          );
-        }
-      }
-    } catch (error) {
-      console.error("Erreur assignation bureau section:", error);
-      throw error;
-    }
-  }
+  // ❌ SUPPRIMÉ - assignBureauSection()
+  // Les rôles sont gérés via AssociationMember + Role + permissions
 
   // 📊 RAPPORT COMPARATIF SECTIONS
   async getSectionsComparison(req, res) {
@@ -933,9 +769,7 @@ class SectionController {
         monthlyRevenue = Math.round(activeMembers * averageCotisation);
       }
 
-      // Vérifier si bureau complet
-      const bureau = section.bureauSection || {};
-      const bureauComplete = !!(bureau.responsable?.name && bureau.secretaire?.name && bureau.tresorier?.name);
+      // ❌ SUPPRIMÉ - Vérification bureauComplete (plus de notion de "bureau complet")
 
       // Mettre à jour le count si différent
       if (section.membersCount !== membersCount) {
@@ -949,7 +783,7 @@ class SectionController {
           activeMembers,
           pendingMembers,
           monthlyRevenue,
-          bureauComplete
+          // ❌ SUPPRIMÉ - bureauComplete
         }
       };
 
