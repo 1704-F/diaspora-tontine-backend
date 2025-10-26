@@ -259,9 +259,9 @@ class ExpenseRequestController {
 
       // Filtres date
       if (dateFrom || dateTo) {
-        whereClause.createdAt = {};
-        if (dateFrom) whereClause.createdAt[Op.gte] = new Date(dateFrom);
-        if (dateTo) whereClause.createdAt[Op.lte] = new Date(dateTo);
+        whereClause.created_at = {};
+        if (dateFrom) whereClause.created_at[Op.gte] = new Date(dateFrom);
+        if (dateTo) whereClause.created_at[Op.lte] = new Date(dateTo);
       }
 
       // 📊 EXÉCUTION REQUÊTE AVEC PAGINATION
@@ -1533,7 +1533,7 @@ class ExpenseRequestController {
         const days = periodMap[period];
         if (days) {
           const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-          whereClause.createdAt = {
+          whereClause.created_at = {
             [Op.gte]: startDate,
           };
         }

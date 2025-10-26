@@ -4,12 +4,15 @@ const {
   Section,
   AssociationMember,
   User,
-  Transaction
+  Transaction,
 } = require("../../../models");
 const { Op } = require("sequelize");
 
 // ✅ NOUVEAU : Import système RBAC moderne
-const { hasPermission, getEffectivePermissions } = require('../../../core/middleware/checkPermission');
+const {
+  hasPermission,
+  getEffectivePermissions,
+} = require("../../../core/middleware/checkPermission");
 
 // ❌ SUPPRIMÉ - updateMemberRoles() - Remplacé par système RBAC
 // Les rôles sont maintenant gérés via AssociationMember.roles
@@ -42,11 +45,11 @@ class SectionController {
           status: "active",
         },
         include: [
-          { 
-            model: Association, 
+          {
+            model: Association,
             as: "association",
-            attributes: ['rolesConfiguration']
-          }
+            attributes: ["rolesConfiguration"],
+          },
         ],
       });
 
@@ -214,9 +217,9 @@ class SectionController {
             {
               model: Association,
               as: "association",
-              attributes: ['rolesConfiguration']
-            }
-          ]
+              attributes: ["rolesConfiguration"],
+            },
+          ],
         }),
         AssociationMember.findOne({
           where: {
@@ -229,9 +232,9 @@ class SectionController {
             {
               model: Association,
               as: "association",
-              attributes: ['rolesConfiguration']
-            }
-          ]
+              attributes: ["rolesConfiguration"],
+            },
+          ],
         }),
       ]);
 
@@ -335,12 +338,15 @@ class SectionController {
         }),
         Transaction.findOne({
           where: {
-            sectionId,
+            sectionId: section.id,
             type: "cotisation",
             status: "completed",
           },
           attributes: [
-            [sequelize.fn("AVG", sequelize.col("amount")), "average"],
+            [
+              sequelize.fn("AVG", sequelize.col("Transaction.amount")),
+              "average",
+            ], // ✅ Explicite
           ],
           raw: true,
         }),
@@ -397,9 +403,9 @@ class SectionController {
           {
             model: Association,
             as: "association",
-            attributes: ['rolesConfiguration']
-          }
-        ]
+            attributes: ["rolesConfiguration"],
+          },
+        ],
       });
 
       // ✅ NOUVEAU : Vérifier permissions avec RBAC moderne
@@ -485,9 +491,9 @@ class SectionController {
           {
             model: Association,
             as: "association",
-            attributes: ['rolesConfiguration']
-          }
-        ]
+            attributes: ["rolesConfiguration"],
+          },
+        ],
       });
 
       // ✅ NOUVEAU : Vérifier permissions avec RBAC moderne
@@ -603,9 +609,9 @@ class SectionController {
           {
             model: Association,
             as: "association",
-            attributes: ['rolesConfiguration']
-          }
-        ]
+            attributes: ["rolesConfiguration"],
+          },
+        ],
       });
 
       // ✅ NOUVEAU : Vérifier permissions avec RBAC moderne
@@ -633,6 +639,7 @@ class SectionController {
             await Promise.all([
               section.getActiveMembersCount(),
               section.getMonthlyContributions(),
+
               Transaction.findOne({
                 where: {
                   sectionId: section.id,
@@ -640,7 +647,10 @@ class SectionController {
                   status: "completed",
                 },
                 attributes: [
-                  [sequelize.fn("AVG", sequelize.col("amount")), "average"],
+                  [
+                    sequelize.fn("AVG", sequelize.col("Transaction.amount")),
+                    "average",
+                  ], // ✅ Explicite
                 ],
                 raw: true,
               }),
@@ -701,71 +711,74 @@ class SectionController {
         where: {
           userId: req.user.id,
           associationId,
-          status: 'active'
-        }
+          status: "active",
+        },
       });
 
-      if (!membership && req.user.role !== 'super_admin') {
+      if (!membership && req.user.role !== "super_admin") {
         return res.status(403).json({
-          error: 'Accès association non autorisé',
-          code: 'ASSOCIATION_ACCESS_DENIED'
+          error: "Accès association non autorisé",
+          code: "ASSOCIATION_ACCESS_DENIED",
         });
       }
 
       // Récupérer la section avec statistiques
       const section = await Section.findOne({
-        where: { 
+        where: {
           id: sectionId,
-          associationId 
+          associationId,
         },
         include: [
           {
             model: Association,
-            as: 'association',
-            attributes: ['id', 'name', 'isMultiSection']
-          }
-        ]
+            as: "association",
+            attributes: ["id", "name", "isMultiSection"],
+          },
+        ],
       });
 
       if (!section) {
         return res.status(404).json({
-          error: 'Section introuvable',
-          code: 'SECTION_NOT_FOUND'
+          error: "Section introuvable",
+          code: "SECTION_NOT_FOUND",
         });
       }
 
       // Calculer statistiques section
       const [membersCount, activeMembers, pendingMembers] = await Promise.all([
         AssociationMember.count({
-          where: { 
-            associationId,
-            sectionId: section.id 
-          }
-        }),
-        AssociationMember.count({
-          where: { 
+          where: {
             associationId,
             sectionId: section.id,
-            status: 'active'
-          }
+          },
         }),
         AssociationMember.count({
-          where: { 
+          where: {
             associationId,
             sectionId: section.id,
-            status: 'pending'
-          }
-        })
+            status: "active",
+          },
+        }),
+        AssociationMember.count({
+          where: {
+            associationId,
+            sectionId: section.id,
+            status: "pending",
+          },
+        }),
       ]);
 
       // Calculer revenus mensuels (estimation)
       const association = await Association.findByPk(associationId);
       const memberTypes = association?.memberTypes || {};
-      
+
       let monthlyRevenue = 0;
       if (Object.keys(memberTypes).length > 0) {
-        const averageCotisation = Object.values(memberTypes)
-          .reduce((sum, type) => sum + (type.monthlyAmount || 0), 0) / Object.keys(memberTypes).length;
+        const averageCotisation =
+          Object.values(memberTypes).reduce(
+            (sum, type) => sum + (type.monthlyAmount || 0),
+            0
+          ) / Object.keys(memberTypes).length;
         monthlyRevenue = Math.round(activeMembers * averageCotisation);
       }
 
@@ -784,22 +797,21 @@ class SectionController {
           pendingMembers,
           monthlyRevenue,
           // ❌ SUPPRIMÉ - bureauComplete
-        }
+        },
       };
 
       res.json({
         success: true,
         data: {
-          section: sectionWithStats
-        }
+          section: sectionWithStats,
+        },
       });
-
     } catch (error) {
-      console.error('Erreur récupération section:', error);
+      console.error("Erreur récupération section:", error);
       res.status(500).json({
-        error: 'Erreur récupération section',
-        code: 'SECTION_FETCH_ERROR',
-        details: error.message
+        error: "Erreur récupération section",
+        code: "SECTION_FETCH_ERROR",
+        details: error.message,
       });
     }
   }

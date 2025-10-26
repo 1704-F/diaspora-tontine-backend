@@ -546,7 +546,7 @@ console.log(`✅ Membership admin créé (ID: ${adminMembership.id}) - Gestionna
             associationId: id,
             type: "cotisation",
             status: "completed",
-            createdAt: {
+            created_at: {
               [Op.gte]: new Date(
                 new Date().getFullYear(),
                 new Date().getMonth(),
@@ -623,7 +623,7 @@ console.log(`✅ Membership admin créé (ID: ${adminMembership.id}) - Gestionna
           "country",
           "city",
           "membersCount",
-          "created_at",
+          "createdAt",
         ],
         include: [
           {
@@ -636,7 +636,7 @@ console.log(`✅ Membership admin créé (ID: ${adminMembership.id}) - Gestionna
         offset: parseInt(offset),
         order: [
           ["membersCount", "DESC"],
-          ["created_at", "DESC"],
+          ["createdAt", "DESC"],
         ],
       });
 
