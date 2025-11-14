@@ -108,6 +108,11 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.ENUM("male", "female", "other", "prefer_not_to_say"),
         allowNull: true,
       },
+      profilePicture: {
+        type: DataTypes.STRING,
+        allowNull: true,
+        comment: "URL de la photo de profil",
+      },
 
       // 📍 ADRESSE
       address: {

@@ -18,7 +18,7 @@ function hasPermission(userRoles, permissionConfig, superAdminRole = null) {
     return true;
   }
   
-  // 🔥 PRIORITÉ 2: super_admin (rôle plateforme)
+  // 🔥 PRIORITÉ 2: super_admin (rôle plateforme) 
   if (superAdminRole === 'super_admin') {
     return true;
   }

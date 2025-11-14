@@ -1,23 +1,13 @@
-// src/modules/associations/routes/expenseRequests.js - VERSION CORRIGÉE
-// Routes complètes pour gestion financière association
+// src/modules/associations/routes/expenseRequests.js
 
 const express = require('express');
 const router = express.Router();
 const { body, param, query } = require('express-validator');
 const { authenticate: authMiddleware } = require('../../../core/auth/middleware/auth');
 const { handleValidationErrors } = require('../../../core/middleware/validation');
-
-// ✅ IMPORT PERMISSIONS CORRIGÉ
 const { checkAssociationMember, checkPermission } = require('../../../core/middleware/checkPermission');
 
 const expenseRequestController = require('../controllers/expenseRequestController');
-
-// ❌ SUPPRIMER ce middleware local qui fait doublon
-/*
-const checkValidationRights = async (req, res, next) => {
-  // Code supprimé car remplacé par checkFinancialValidationRights
-};
-*/
 
 // 📋 VALIDATIONS (inchangées)
 const validateCreateExpenseRequest = [
@@ -187,8 +177,7 @@ router.post('/:associationId/expense-requests',
 router.get('/:associationId/expense-requests',
   authMiddleware,
   checkAssociationMember,
-  // ✅ PERMISSIONS: Ajouter vérification vue financière
-  checkPermission('view_finances'),
+  checkPermission('finances.view_treasury'), // ✅ AVEC PRÉFIXE
   [
     param('associationId')
       .isInt({ min: 1 })
@@ -288,7 +277,7 @@ router.get('/:associationId/expense-requests/:requestId',
       
     handleValidationErrors
   ],
-  expenseRequestController.getExpenseRequestDetails
+  expenseRequestController.getExpenseRequestById 
 );
 
 /**
@@ -341,7 +330,7 @@ router.delete('/:associationId/expense-requests/:requestId',
 router.post('/:associationId/expense-requests/:requestId/approve',
   authMiddleware,
   checkAssociationMember,
-  checkPermission('validate_expenses'),
+  checkPermission('finances.validate_expenses'), // ✅ AVEC PRÉFIXE
   [
     param('associationId')
       .isInt({ min: 1 })
@@ -381,7 +370,7 @@ router.post('/:associationId/expense-requests/:requestId/approve',
 router.post('/:associationId/expense-requests/:requestId/reject',
   authMiddleware,
   checkAssociationMember,
-  checkPermission('validate_expenses'),
+  checkPermission('finances.validate_expenses'), // ✅ AVEC PRÉFIXE
   [
     param('associationId')
       .isInt({ min: 1 })
@@ -409,7 +398,7 @@ router.post('/:associationId/expense-requests/:requestId/reject',
 router.post('/:associationId/expense-requests/:requestId/request-info',
   authMiddleware,
   checkAssociationMember,
-  checkPermission('validate_expenses'),
+  checkPermission('finances.validate_expenses'), // ✅ AVEC PRÉFIXE
   [
     param('associationId')
       .isInt({ min: 1 })
@@ -437,7 +426,7 @@ router.post('/:associationId/expense-requests/:requestId/request-info',
 router.get('/:associationId/expense-requests-pending',
   authMiddleware,
   checkAssociationMember,
-  checkPermission('validate_expenses'),
+  checkPermission('finances.validate_expenses'), // ✅ AVEC PRÉFIXE
   [
     param('associationId')
       .isInt({ min: 1 })
@@ -456,8 +445,7 @@ router.get('/:associationId/expense-requests-pending',
 router.get('/:associationId/expense-requests/pending-validations',
   authMiddleware,
   checkAssociationMember,
-  // ✅ CORRECTION: Utiliser le middleware centralisé
-  checkPermission('validate_expenses'),
+  checkPermission('finances.validate_expenses'), // ✅ AVEC PRÉFIXE
   [
     param('associationId')
       .isInt({ min: 1 })
@@ -500,8 +488,7 @@ router.get('/:associationId/expense-requests/:requestId/validation-history',
 router.post('/:associationId/expense-requests/:requestId/pay',
   authMiddleware,
   checkAssociationMember,
-  // ✅ CORRECTION: Utiliser validation financière pour paiements aussi
-  checkPermission('validate_expenses'),
+  checkPermission('finances.validate_expenses'), // ✅ AVEC PRÉFIXE
   [
     param('associationId')
       .isInt({ min: 1 })
@@ -556,7 +543,7 @@ router.post('/:associationId/expense-requests/:requestId/pay',
 router.get('/:associationId/expense-requests/:requestId/repayments',
   authMiddleware,
   checkAssociationMember,
-  checkPermission('view_finances'),
+  checkPermission('finances.view_treasury'), // ✅ AVEC PRÉFIXE
   [
     param('associationId')
       .isInt({ min: 1 })
@@ -579,8 +566,7 @@ router.get('/:associationId/expense-requests/:requestId/repayments',
 router.post('/:associationId/expense-requests/:requestId/repayments',
   authMiddleware,
   checkAssociationMember,
-  // ✅ CORRECTION: Validation financière pour remboursements
-  checkPermission('validate_expenses'),
+  checkPermission('finances.validate_expenses'), // ✅ AVEC PRÉFIXE
   [
     param('associationId')
       .isInt({ min: 1 })
@@ -634,8 +620,7 @@ router.post('/:associationId/expense-requests/:requestId/repayments',
 router.get('/:associationId/expense-requests/statistics',
   authMiddleware,
   checkAssociationMember,
-  // ✅ CORRECTION: Vue financière au lieu de validation
-  checkPermission('view_finances'),
+  checkPermission('finances.view_treasury'), // ✅ AVEC PRÉFIXE
   [
     param('associationId')
       .isInt({ min: 1 })
@@ -664,7 +649,7 @@ router.get('/:associationId/expense-requests/statistics',
 router.get('/:associationId/financial-summary',
   authMiddleware,
   checkAssociationMember,
-  checkPermission('view_finances'),
+  checkPermission('finances.view_treasury'), // ✅ AVEC PRÉFIXE
   [
     param('associationId')
       .isInt({ min: 1 })
@@ -708,8 +693,7 @@ router.get('/:associationId/financial-summary',
 router.get('/:associationId/expense-requests/export',
   authMiddleware,
   checkAssociationMember,
-  // ✅ CORRECTION: Vue financière pour exports
-  checkPermission('view_finances'),
+  checkPermission('finances.export_data'), // ✅ AVEC PRÉFIXE
   [
     param('associationId')
       .isInt({ min: 1 })

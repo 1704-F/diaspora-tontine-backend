@@ -65,13 +65,6 @@ router.get(
   associationController.listUserAssociations
 );
 
-// Détails association spécifique
-router.get('/:id',
-  authenticate,
-  validateId,
-  associationController.getAssociation
-);
-
 // Rechercher associations publiques
 router.get(
   "/search",
@@ -88,64 +81,64 @@ router.get(
 );
 
 // Modifier association
-// ✅ MIGRÉ: president → modify_settings
+// ✅ CORRIGÉ: administration.modify_settings
 router.put(
   "/:id",
   authenticate,
   validateId,
   validateUpdateAssociation,
   checkAssociationMember,
-  checkPermission("modify_settings"),
+  checkPermission("administration.modify_settings"),
   associationController.updateAssociation
 );
 
 // Supprimer association (soft delete)
-// ✅ MIGRÉ: president → modify_settings
+// ✅ CORRIGÉ: administration.modify_settings
 router.delete(
   "/:id",
   authenticate,
   validateId,
   checkAssociationMember,
-  checkPermission("modify_settings"),
+  checkPermission("administration.modify_settings"),
   associationController.deleteAssociation
 );
 
 // Mettre à jour configuration (types membres, bureau, permissions)
-// ✅ MIGRÉ: admin/bureau → manage_roles
+// ✅ CORRIGÉ: administration.manage_roles
 router.put(
   "/:id/configuration",
   authenticate,
   validateId,
   checkAssociationMember,
-  checkPermission("manage_roles"),
+  checkPermission("administration.manage_roles"),
   associationController.updateConfiguration
 );
 
 // Statistiques association
-// ✅ MIGRÉ: member → checkAssociationMember seulement
+// ✅ Tous les membres peuvent voir
 router.get(
   "/:id/stats",
   authenticate,
   validateId,
-  checkAssociationMember, // Tous les membres peuvent voir
+  checkAssociationMember,
   associationController.getAssociationStats
 );
 
-// 🏗️ ROUTES SECTIONS
+// 🗂️ ROUTES SECTIONS
 
 // Créer section
-// ✅ MIGRÉ: central_board → manage_sections
+// ✅ CORRIGÉ: administration.manage_sections
 router.post(
   "/:associationId/sections",
   authenticate,
   validateAssociationId,
   checkAssociationMember,
-  checkPermission("manage_sections"),
+  checkPermission("administration.manage_sections"),
   sectionController.createSection
 );
 
 // Lister sections
-// ✅ MIGRÉ: member → checkAssociationMember seulement
+// ✅ Tous les membres peuvent voir
 router.get(
   "/:associationId/sections",
   authenticate,
@@ -155,7 +148,7 @@ router.get(
 );
 
 // Détails d'une section
-// ✅ MIGRÉ: member → checkAssociationMember seulement
+// ✅ Tous les membres peuvent voir
 router.get(
   "/:associationId/sections/:sectionId",
   authenticate,
@@ -165,19 +158,18 @@ router.get(
 );
 
 // Modifier section
-// ✅ MIGRÉ: responsable_section → manage_sections
+// ✅ CORRIGÉ: administration.manage_sections
 router.put(
   "/:associationId/sections/:sectionId",
   authenticate,
   validateAssociationId,
   checkAssociationMember,
-  checkPermission("manage_sections"),
+  checkPermission("administration.manage_sections"),
   sectionController.updateSection
 );
 
-
 // Statistiques section
-// ✅ MIGRÉ: member → checkAssociationMember seulement
+// ✅ Tous les membres peuvent voir
 router.get(
   "/:associationId/sections/:sectionId/stats",
   authenticate,
@@ -187,75 +179,85 @@ router.get(
 );
 
 // Supprimer section
-// ✅ MIGRÉ: president → manage_sections
+// ✅ CORRIGÉ: administration.manage_sections
 router.delete(
   "/:associationId/sections/:sectionId",
   authenticate,
   validateAssociationId,
   checkAssociationMember,
-  checkPermission("manage_sections"),
+  checkPermission("administration.manage_sections"),
   sectionController.deleteSection
 );
 
 // Rapport comparatif sections
-// ✅ MIGRÉ: central_board → view_sections
+// ✅ Tous les membres peuvent voir
 router.get(
   "/:associationId/sections-comparison",
   authenticate,
   validateAssociationId,
   checkAssociationMember,
-  checkPermission("view_sections"),
   sectionController.getSectionsComparison
 );
 
 // Transférer membre entre sections
-// ✅ MIGRÉ: central_board → manage_members
+// ✅ CORRIGÉ: membres.manage_members
 router.post(
   "/:associationId/sections/:sectionId/transfer-member",
   authenticate,
   validateAssociationId,
   checkAssociationMember,
-  checkPermission("manage_members"),
+  checkPermission("membres.manage_members"),
   sectionController.transferMember
 );
 
 // 👥 ROUTES MEMBRES
 
 // Ajouter membre
-// ✅ MIGRÉ: admin_association → manage_members
+// ✅ CORRIGÉ: membres.manage_members
 router.post(
   "/:associationId/members",
   authenticate,
   validateAssociationId,
   checkAssociationMember,
-  checkPermission("manage_members"),
+  checkPermission("membres.manage_members"),
   memberController.addMember
 );
 
 // Lister membres
-// ✅ MIGRÉ: member → view_members
+// ✅ CORRIGÉ: membres.view_list
 router.get(
   "/:associationId/members",
   authenticate,
   validateAssociationId,
   checkAssociationMember,
-  checkPermission("view_members"),
+  checkPermission("membres.view_list"),
   memberController.listMembers
 );
 
+// Exporter membres en PDF
+
+router.get(
+  "/:associationId/members/export-pdf",
+  authenticate,
+  validateAssociationId,
+  checkAssociationMember,
+  checkPermission("membres.export_data"),
+  memberController.exportMembersPDF
+);
+
 // Membres d'une section
-// ✅ MIGRÉ: member → view_members
+// ✅ CORRIGÉ: membres.view_list
 router.get(
   "/:associationId/sections/:sectionId/members",
   authenticate,
   validateAssociationId,
   checkAssociationMember,
-  checkPermission("view_members"),
+  checkPermission("membres.view_list"),
   memberController.getSectionMembers
 );
 
 // Dashboard membre personnel
-// ✅ MIGRÉ: member → checkAssociationMember seulement (son propre dashboard)
+// ✅ Chaque membre peut voir son propre dashboard
 router.get(
   "/:associationId/my-dashboard",
   authenticate,
@@ -265,46 +267,46 @@ router.get(
 );
 
 // Obtenir détails d'un membre
-// ✅ MIGRÉ: member → view_members
+// ✅ CORRIGÉ: membres.view_details
 router.get(
   "/:associationId/members/:memberId",
   authenticate,
   validateAssociationId,
   checkAssociationMember,
-  checkPermission("view_members"),
+  checkPermission("membres.view_details"),
   memberController.getMember
 );
 
 // Modifier membre
-// ✅ MIGRÉ: admin_association → manage_members
+// ✅ CORRIGÉ: membres.manage_members
 router.put(
   "/:associationId/members/:memberId",
   authenticate,
   validateAssociationId,
   checkAssociationMember,
-  checkPermission("manage_members"),
+  checkPermission("membres.manage_members"),
   memberController.updateMember
 );
 
 // Modifier statut membre
-// ✅ MIGRÉ: central_board → manage_members
+// ✅ CORRIGÉ: membres.manage_members
 router.put(
   "/:associationId/members/:memberId/status",
   authenticate,
   validateAssociationId,
   checkAssociationMember,
-  checkPermission("manage_members"),
+  checkPermission("membres.manage_members"),
   memberController.updateMemberStatus
 );
 
 // Historique cotisations membre
-// ✅ MIGRÉ: member → view_members (peut voir ses cotisations ou autres si permissions)
+// ✅ CORRIGÉ: membres.view_details (peut voir ses cotisations ou autres si permissions)
 router.get(
   "/:associationId/members/:memberId/cotisations",
   authenticate,
   validateAssociationId,
   checkAssociationMember,
-  checkPermission("view_members"),
+  checkPermission("membres.view_details"),
   memberController.getMemberCotisations
 );
 
@@ -322,114 +324,100 @@ router.put(
 router.post("/cotisations", authenticate, memberController.payCotisation);
 
 // Rapport cotisations association
-// ✅ MIGRÉ: tresorier → view_finances
+// ✅ CORRIGÉ: finances.view_treasury
 router.get(
   "/:associationId/cotisations-report",
   authenticate,
   validateAssociationId,
   checkAssociationMember,
-  checkPermission("view_finances"),
+  checkPermission("finances.view_treasury"),
   memberController.getCotisationsReport
 );
 
 // Import historique cotisations
-// ✅ MIGRÉ: central_board → manage_cotisations
+// ✅ CORRIGÉ: finances.manage_budgets
 router.post(
   "/:associationId/import-cotisations",
   authenticate,
   validateAssociationId,
   checkAssociationMember,
-  checkPermission("manage_cotisations"),
+  checkPermission("finances.manage_budgets"),
   memberController.importCotisationsHistory
 );
 
 // Cotisations en retard
-// ✅ MIGRÉ: tresorier → view_finances
+// ✅ CORRIGÉ: finances.view_treasury
 router.get(
   "/:associationId/overdue-cotisations",
   authenticate,
   validateAssociationId,
   checkAssociationMember,
-  checkPermission("view_finances"),
+  checkPermission("finances.view_treasury"),
   memberController.getOverdueCotisations
 );
 
 // Dashboard cotisations
-// ✅ MIGRÉ: admin/bureau → view_finances
+// ✅ CORRIGÉ: finances.view_treasury
 router.get(
   "/:associationId/cotisations-dashboard",
   authenticate,
   validateAssociationId,
   checkAssociationMember,
-  checkPermission("view_finances"),
+  checkPermission("finances.view_treasury"),
   memberController.getCotisationsDashboard
 );
 
 // Ajouter cotisation manuelle
-// ✅ MIGRÉ: admin/bureau → manage_cotisations
+// ✅ CORRIGÉ: finances.manage_budgets
 router.post(
   "/:associationId/cotisations-manual",
   authenticate,
   validateAssociationId,
   checkAssociationMember,
-  checkPermission("manage_cotisations"),
+  checkPermission("finances.manage_budgets"),
   memberController.addManualCotisation
 );
 
 // 📄 ROUTES DOCUMENTS
 
 // Upload document KYB
-// ✅ MIGRÉ: admin → upload_documents
+// ✅ CORRIGÉ: documents.upload
 router.post(
   "/:id/documents",
   authenticate,
   upload.single("document"),
   checkAssociationMember,
-  checkPermission("upload_documents"),
+  checkPermission("documents.upload"),
   associationController.uploadDocument
 );
 
 // Lister documents association
-// ✅ MIGRÉ: member → view_documents
+// ✅ Tous les membres peuvent voir les documents
 router.get(
   "/:id/documents",
   authenticate,
   checkAssociationMember,
-  checkPermission("view_documents"),
   associationController.getDocuments
 );
 
 // Télécharger document spécifique
-// ✅ MIGRÉ: member → view_documents
+// ✅ Tous les membres peuvent voir les documents
 router.get(
   "/:id/documents/:documentId",
   authenticate,
   checkAssociationMember,
-  checkPermission("view_documents"),
   associationController.downloadDocument
 );
 
 // Supprimer document spécifique
-// ✅ MIGRÉ: admin → manage_documents
+// ✅ CORRIGÉ: documents.manage
 router.delete(
   "/:id/documents/:documentId",
   authenticate,
   checkAssociationMember,
-  checkPermission("manage_documents"),
+  checkPermission("documents.manage"),
   associationController.deleteDocument
 );
-
-// ⚙️ SETUP ASSOCIATION
-
-// Route spécifique pour setup association
-// ✅ MIGRÉ: admin → manage_roles
-//router.put('/:id/setup',
-//authenticate,
-//validateId,
-//checkAssociationMember,
-//checkPermission('manage_roles'),
-//associationController.updateAssociationSetup
-//);
 
 // 🚨 GESTION D'ERREURS
 router.use((error, req, res, next) => {

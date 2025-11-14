@@ -386,6 +386,17 @@ module.exports = (sequelize, DataTypes) => {
         comment: "Notes internes bureau association",
       },
 
+      profession: {
+        type: DataTypes.STRING(100),
+        allowNull: true,
+        comment: "Profession ou domaine d'activité du membre",
+      },
+      emergencyContact: {
+        type: DataTypes.STRING(50),
+        allowNull: true,
+        comment: "Numéro de téléphone contact d'urgence",
+      },
+
       socialProfileVisible: {
         type: DataTypes.BOOLEAN,
         allowNull: false,

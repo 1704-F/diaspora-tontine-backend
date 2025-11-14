@@ -10,170 +10,189 @@ const {
   Transaction,
   Document,
   AssociationMember,
+  AuditLog,
+  sequelize,
 } = require("../../../models");
 const AssociationBalanceService = require("../services/associationBalanceService");
 
 // ✅ NOUVEAU : Import système RBAC moderne
-const { hasPermission, getEffectivePermissions } = require('../../../core/middleware/checkPermission');
+const {
+  hasPermission,
+  getEffectivePermissions,
+} = require("../../../core/middleware/checkPermission");
 
 class ExpenseRequestController {
   /**
    * 📝 Créer nouvelle demande de dépense
    */
   async createExpenseRequest(req, res) {
+    const transaction = await sequelize.transaction();
+
     try {
       const { associationId } = req.params;
-      const userId = req.user.id;
-      const membership = req.membership;
-
+      const requesterId = req.user.id;
       const {
         expenseType,
-        expenseSubtype,
         title,
         description,
         amountRequested,
-        currency = "EUR",
-        urgencyLevel = "normal",
+        currency,
+        urgencyLevel,
         beneficiaryId,
         beneficiaryExternal,
+        expectedImpact,
+        actualImpact,
+        isLoan,
+        loanTerms,
+        expenseSubtype,
         documents,
         externalReferences,
-        expectedImpact,
-        isLoan = false,
-        loanTerms,
-        metadata,
       } = req.body;
 
-      // ✅ NOUVEAU : Contrôle permissions avec RBAC moderne
-      const isAdmin = membership?.isAdmin || false;
-      
-      // Admin peut tout faire
-      if (!isAdmin) {
-        if (expenseType === "aide_membre") {
-          // Membres actifs peuvent demander des aides
-          if (!membership || membership.status !== "active") {
-            return res.status(403).json({
-              error: "Seuls les membres actifs peuvent demander des aides",
-              code: "MEMBER_REQUIRED",
-            });
-          }
-        } else {
-          // Autres dépenses = permission manage_expenses requise
-          if (!hasPermission(membership, "manage_expenses")) {
-            return res.status(403).json({
-              error: "Permission requise pour enregistrer ce type de dépense",
-              code: "INSUFFICIENT_PERMISSIONS",
-              required: "manage_expenses",
-            });
-          }
-        }
+      // ✅ 1. VÉRIFIER L'ASSOCIATION EXISTE
+      const association = await Association.findByPk(associationId);
+
+      if (!association) {
+        await transaction.rollback();
+        return res.status(404).json({
+          error: "Association non trouvée",
+          code: "ASSOCIATION_NOT_FOUND",
+        });
       }
 
-      // 💰 VÉRIFICATION FONDS DISPONIBLES
+      // ✅ 2. VÉRIFICATION DES FONDS DISPONIBLES
       const fundsCheck = await AssociationBalanceService.checkSufficientFunds(
         parseInt(associationId),
         parseFloat(amountRequested)
       );
 
+      // ⚠️ AVERTISSEMENT si fonds insuffisants (mais on crée quand même la demande)
+      // La demande sera en "pending" et devra être approuvée par le bureau
       if (!fundsCheck.sufficient) {
-        return res.status(400).json({
-          error: "Fonds insuffisants",
-          code: "INSUFFICIENT_FUNDS",
-          details: {
-            requested: amountRequested,
-            available: fundsCheck.availableBalance,
-            shortage: fundsCheck.shortage,
-          },
+        console.warn(
+          `⚠️ Demande créée avec fonds insuffisants. ` +
+            `Requis: ${amountRequested} ${
+              currency || association.primaryCurrency
+            }, ` +
+            `Disponible: ${fundsCheck.availableBalance}, ` +
+            `Manquant: ${fundsCheck.shortage}`
+        );
+      }
+
+      // ✅ 3. VALIDATION MEMBRE ACTIF
+      const membership = await AssociationMember.findOne({
+        where: {
+          associationId: parseInt(associationId),
+          userId: requesterId,
+          status: "active",
+        },
+        transaction,
+      });
+
+      if (!membership) {
+        await transaction.rollback();
+        return res.status(403).json({
+          error: "Vous devez être membre actif pour créer une demande",
+          code: "MEMBERSHIP_REQUIRED",
         });
       }
 
-      if (beneficiaryId) {
-        const beneficiary = await User.findByPk(parseInt(beneficiaryId));
-        if (!beneficiary) {
-          return res.status(400).json({
-            error: "Bénéficiaire sélectionné introuvable",
-            code: "BENEFICIARY_NOT_FOUND",
-            beneficiaryId: beneficiaryId,
-          });
-        }
+      // ✅ 4. CONSTRUCTION DU PAYLOAD
+      const payload = {
+        associationId: parseInt(associationId),
+        requesterId,
+        expenseType,
+        title: title.trim(),
+        description: description.trim(),
+        amountRequested: parseFloat(amountRequested),
+        currency: currency || association.primaryCurrency,
+        urgencyLevel: urgencyLevel || "normal",
+        status: "pending",
+        isLoan: isLoan || false,
+        beneficiaryId: beneficiaryId ? parseInt(beneficiaryId) : null,
+        beneficiaryExternal: beneficiaryExternal || null,
+        expectedImpact: expectedImpact?.trim() || null,
+        actualImpact: actualImpact?.trim() || null,
+        expenseSubtype: expenseSubtype?.trim() || null,
+        loanTerms: isLoan && loanTerms ? loanTerms : null,
+        documents: documents || [],
+        externalReferences: externalReferences || {},
+
+        // ✅ MÉTADONNÉES : Vérification des fonds au moment de la création
+        metadata: {
+          fundsCheckAtCreation: {
+            sufficient: fundsCheck.sufficient,
+            availableBalance: fundsCheck.availableBalance,
+            requestedAmount: fundsCheck.requestedAmount,
+            shortage: fundsCheck.shortage,
+            checkedAt: new Date().toISOString(),
+          },
+        },
+      };
+
+      // ✅ 5. CRÉATION DE LA DEMANDE
+      const expenseRequest = await ExpenseRequest.create(payload, {
+        transaction,
+      });
+
+      /* TEMPORAIREMENT DÉSACTIVÉ - Modèle AuditLog manquant
+
+      // ✅ 6. LOG D'AUDIT
+      try {
+        
+        await AuditLog.create(
+          {
+            userId: requesterId,
+            associationId: parseInt(associationId),
+            action: "expense_request_created",
+            entityType: "ExpenseRequest",
+            entityId: expenseRequest.id,
+            details: {
+              expenseType,
+              amountRequested: parseFloat(amountRequested),
+              currency: payload.currency,
+              title,
+              fundsAvailable: fundsCheck.sufficient,
+              insufficientFunds: !fundsCheck.sufficient,
+            },
+          },
+          { transaction }
+        );
+      } catch (auditError) {
+        console.warn("⚠️ Erreur log audit (non bloquant):", auditError.message);
+        // On ne bloque pas la création si l'audit échoue
       }
 
-      // ✅ CRÉATION DEMANDE
-      const expenseRequest = await ExpenseRequest.create({
-        associationId: parseInt(associationId),
-        sectionId: membership?.sectionId || null,
-        requesterId: userId,
-        beneficiaryId: beneficiaryId ? parseInt(beneficiaryId) : null,
-        beneficiaryExternal,
-        expenseType,
-        expenseSubtype,
-        title,
-        description,
-        amountRequested: parseFloat(amountRequested),
-        currency,
-        urgencyLevel,
-        documents,
-        externalReferences,
-        expectedImpact,
-        isLoan,
-        loanTerms,
-        metadata,
-        status: "pending",
-      });
+      */
 
-      // Dans createExpenseRequest, après validation beneficiaryId
-      console.log("🔍 Debug membres disponibles:");
-      const allMembers = await AssociationMember.findAll({
-        where: { associationId: parseInt(associationId), status: "active" },
-        include: [
-          {
-            model: User,
-            as: "user",
-            attributes: ["id", "firstName", "lastName"],
-          },
-        ],
-      });
-      console.log(
-        "Membres trouvés:",
-        allMembers.map((m) => ({
-          memberId: m.id,
-          userId: m.user?.id,
-          name: `${m.user?.firstName} ${m.user?.lastName}`,
-        }))
-      );
+      await transaction.commit();
 
-      // 📊 CHARGER RELATIONS POUR RÉPONSE
-      const createdRequest = await ExpenseRequest.findByPk(expenseRequest.id, {
-        include: [
-          {
-            model: User,
-            as: "requester",
-            attributes: ["id", "firstName", "lastName"],
-          },
-          {
-            model: User,
-            as: "beneficiary",
-            attributes: ["id", "firstName", "lastName"],
-          },
-          {
-            model: Association,
-            as: "association",
-            attributes: ["id", "name"],
-          },
-        ],
-      });
-
-      res.status(201).json({
-        message: "Demande de dépense créée avec succès",
-        expenseRequest: {
-          ...createdRequest.toJSON(),
-          validationProgress: createdRequest.getValidationProgress(),
-        },
-      });
+      // ✅ 7. RÉPONSE AVEC AVERTISSEMENT SI FONDS INSUFFISANTS
+      return res.status(201).json({
+  success: true,  // ✅ AJOUT
+  message: "Demande de dépense créée avec succès",
+  data: {
+    expense: expenseRequest,  // ✅ RENOMMAGE expense au lieu de expenseRequest
+    fundsWarning: !fundsCheck.sufficient
+      ? {
+          message: "Attention : Les fonds actuels sont insuffisants pour couvrir cette demande",
+          currentBalance: fundsCheck.availableBalance,
+          requiredAmount: fundsCheck.requestedAmount,
+          shortfall: fundsCheck.shortage,
+          currency: payload.currency,
+        }
+      : null,
+  },
+});
     } catch (error) {
-      console.error("Erreur création demande dépense:", error);
-      res.status(500).json({
+      await transaction.rollback();
+      console.error("❌ Erreur création demande dépense:", error);
+
+      return res.status(500).json({
         error: "Erreur lors de la création de la demande",
+        code: "CREATE_EXPENSE_REQUEST_ERROR",
+        details:
+          process.env.NODE_ENV === "development" ? error.message : undefined,
       });
     }
   }
@@ -206,20 +225,20 @@ class ExpenseRequestController {
 
       // ✅ AJOUTER CE MAPPING
       const columnMapping = {
-        'createdAt': 'created_at',
-        'created_at': 'created_at',
-        'amountRequested': 'amount_requested',
-        'urgencyLevel': 'urgency_level',
-        'status': 'status',
-        'approvedAt': 'approved_at'
+        createdAt: "created_at",
+        created_at: "created_at",
+        amountRequested: "amount_requested",
+        urgencyLevel: "urgency_level",
+        status: "status",
+        approvedAt: "approved_at",
       };
 
-      const sortColumn = columnMapping[sortBy] || 'created_at';
+      const sortColumn = columnMapping[sortBy] || "created_at";
 
       // ✅ NOUVEAU : Contrôle accès avec RBAC moderne
       const isAdmin = membership?.isAdmin || false;
-      const canViewAll = 
-        isAdmin || 
+      const canViewAll =
+        isAdmin ||
         hasPermission(membership, "view_finances") ||
         req.user?.role === "super_admin";
 
@@ -384,11 +403,11 @@ class ExpenseRequestController {
       }
 
       // ✅ NOUVEAU : Contrôle accès avec RBAC moderne
-      const canViewAll = 
+      const canViewAll =
         membership?.isAdmin ||
         hasPermission(membership, "view_finances") ||
         req.user?.role === "super_admin";
-      
+
       const isRequester = expenseRequest.requesterId === userId;
       const isBeneficiary = expenseRequest.beneficiaryId === userId;
 
@@ -463,10 +482,9 @@ class ExpenseRequestController {
       }
 
       // ✅ NOUVEAU : Contrôle droits modification avec RBAC moderne
-      const canManageExpenses = 
-        membership?.isAdmin ||
-        hasPermission(membership, "manage_expenses");
-      
+      const canManageExpenses =
+        membership?.isAdmin || hasPermission(membership, "manage_expenses");
+
       const isRequester = expenseRequest.requesterId === userId;
 
       if (!isRequester && !canManageExpenses) {
@@ -570,10 +588,9 @@ class ExpenseRequestController {
       }
 
       // ✅ NOUVEAU : Contrôle droits annulation avec RBAC moderne
-      const canManageExpenses = 
-        membership?.isAdmin ||
-        hasPermission(membership, "manage_expenses");
-      
+      const canManageExpenses =
+        membership?.isAdmin || hasPermission(membership, "manage_expenses");
+
       const isRequester = expenseRequest.requesterId === userId;
 
       if (!isRequester && !canManageExpenses) {
@@ -597,7 +614,8 @@ class ExpenseRequestController {
         {
           status: "cancelled",
           rejectionReason:
-            reason || `Annulée par ${isRequester ? "demandeur" : "gestionnaire"}`,
+            reason ||
+            `Annulée par ${isRequester ? "demandeur" : "gestionnaire"}`,
           metadata: {
             ...expenseRequest.metadata,
             cancelledBy: userId,
@@ -627,100 +645,70 @@ class ExpenseRequestController {
    * ✅ Approuver une demande de dépense
    */
   async approveExpenseRequest(req, res) {
+    const transaction = await sequelize.transaction();
+
     try {
       const { associationId, requestId } = req.params;
-      const { comment, amountApproved, conditions } = req.body;
+      const { amountApproved } = req.body;
 
       const expenseRequest = await ExpenseRequest.findOne({
-        where: {
-          id: parseInt(requestId),
-          associationId: parseInt(associationId),
-          status: ['pending', 'under_review']
-        }
+        where: { id: requestId, associationId },
+        transaction,
       });
 
       if (!expenseRequest) {
+        await transaction.rollback();
         return res.status(404).json({
-          error: 'Demande non trouvée ou déjà traitée',
-          code: 'EXPENSE_REQUEST_NOT_FOUND'
+          error: "Demande non trouvée",
+          code: "EXPENSE_REQUEST_NOT_FOUND",
         });
       }
 
-      // ✅ NOUVEAU : Vérifier permissions avec RBAC moderne
-      const membership = req.membership;
-      const canApprove = 
-        membership?.isAdmin ||
-        hasPermission(membership, "validate_expenses") ||
-        req.user.role === 'super_admin';
+      // ✅ VÉRIFICATION DES FONDS avec le SERVICE
+      const finalAmount = amountApproved || expenseRequest.amountRequested;
 
-      if (!canApprove) {
-        return res.status(403).json({
-          error: 'Permissions insuffisantes',
-          code: 'INSUFFICIENT_PERMISSIONS',
-          required: 'validate_expenses'
-        });
-      }
-
-      // Vérifier si déjà validé
-      const existingValidation = expenseRequest.validationHistory?.find(
-        v => v.userId === req.user.id
+      const fundsCheck = await AssociationBalanceService.checkSufficientFunds(
+        parseInt(associationId),
+        parseFloat(finalAmount)
       );
 
-      if (existingValidation) {
+      // ❌ BLOQUER L'APPROBATION si fonds insuffisants
+      if (!fundsCheck.sufficient) {
+        await transaction.rollback();
         return res.status(400).json({
-          error: 'Vous avez déjà validé cette demande',
-          code: 'ALREADY_VALIDATED'
+          error: "Fonds insuffisants pour approuver cette demande",
+          code: "INSUFFICIENT_FUNDS",
+          details: {
+            requiredAmount: fundsCheck.requestedAmount,
+            currentBalance: fundsCheck.availableBalance,
+            shortfall: fundsCheck.shortage,
+          },
         });
       }
 
-      // Ajouter validation
-      const validationHistory = expenseRequest.validationHistory || [];
-      validationHistory.push({
-        userId: req.user.id,
-        role: membership?.assignedRoles?.[0] || 'member',
-        decision: 'approved',
-        comment: comment || '',
-        timestamp: new Date().toISOString(),
-        user: {
-          firstName: req.user.firstName,
-          lastName: req.user.lastName
-        }
-      });
+      // Mettre à jour la demande
+      await expenseRequest.update(
+        {
+          status: "approved",
+          amountApproved: finalAmount,
+          approvedAt: new Date(),
+          approvedBy: req.user.id,
+        },
+        { transaction }
+      );
 
-      // Déterminer statut
-      const requiredValidators = expenseRequest.requiredValidators || ['president', 'tresorier'];
-      const approvedCount = validationHistory.filter(v => v.decision === 'approved').length;
-      
-      let newStatus = 'under_review';
-      if (approvedCount >= requiredValidators.length) {
-        newStatus = 'approved';
-      }
+      await transaction.commit();
 
-      await expenseRequest.update({
-        status: newStatus,
-        validationHistory,
-        amountApproved: amountApproved || expenseRequest.amountRequested,
-        approvalConditions: conditions || null,
-        approvedAt: newStatus === 'approved' ? new Date() : null
-      });
-
-      res.json({
-        success: true,
-        message: newStatus === 'approved' ? 'Demande approuvée' : 'Validation enregistrée',
-        data: {
-          expenseRequest,
-          validationProgress: {
-            completed: approvedCount,
-            total: requiredValidators.length,
-            percentage: Math.round((approvedCount / requiredValidators.length) * 100)
-          }
-        }
+      return res.status(200).json({
+        message: "Demande approuvée avec succès",
+        data: { expenseRequest },
       });
     } catch (error) {
-      console.error('Erreur approbation:', error);
-      res.status(500).json({
-        error: 'Erreur lors de l\'approbation',
-        code: 'APPROVAL_ERROR'
+      await transaction.rollback();
+      console.error("Erreur approbation:", error);
+      return res.status(500).json({
+        error: "Erreur lors de l'approbation",
+        code: "APPROVE_EXPENSE_ERROR",
       });
     }
   }
@@ -823,96 +811,71 @@ class ExpenseRequestController {
     try {
       const { associationId, requestId } = req.params;
       const {
-        paymentMode = 'manual',
+        paymentMode = "manual",
         paymentMethod,
         paymentDate,
         manualPaymentReference,
         manualPaymentDetails,
-        notes
+        notes,
       } = req.body;
 
-      // Vérifier que la demande existe et est approuvée
       const expenseRequest = await ExpenseRequest.findOne({
         where: {
           id: parseInt(requestId),
           associationId: parseInt(associationId),
-          status: 'approved'
-        }
+          status: "approved",
+        },
       });
 
       if (!expenseRequest) {
         return res.status(404).json({
-          error: 'Demande non trouvée ou non approuvée',
-          code: 'EXPENSE_REQUEST_NOT_FOUND'
+          error: "Demande non trouvée ou non approuvée",
+          code: "EXPENSE_REQUEST_NOT_FOUND",
         });
       }
 
-      // ✅ NOUVEAU : Vérifier permissions avec RBAC moderne
-      const membership = req.membership;
-      const canPay = 
-        membership?.isAdmin ||
-        hasPermission(membership, "validate_expenses") ||
-        req.user.role === 'super_admin';
-
-      if (!canPay) {
-        return res.status(403).json({
-          error: 'Permissions insuffisantes pour confirmer les paiements',
-          code: 'INSUFFICIENT_PERMISSIONS',
-          required: 'validate_expenses'
-        });
-      }
+      // ❌ SUPPRIMÉ : Vérification hasPermission("validate_expenses")
+      // Le middleware s'en charge
 
       // Créer la transaction
       const transaction = await Transaction.create({
         associationId: parseInt(associationId),
         userId: expenseRequest.beneficiaryId || null,
-        type: expenseRequest.isLoan ? 'pret' : 'aide',
-        amount: parseFloat(expenseRequest.amountApproved || expenseRequest.amountRequested),
+        type: expenseRequest.isLoan ? "loan_disbursement" : "expense_payment",
+        amount: expenseRequest.amountApproved,
         currency: expenseRequest.currency,
-        status: 'completed',
+        description: `Paiement: ${expenseRequest.title}`,
+        status: "completed",
         paymentMode,
         paymentMethod,
+        paymentDate: paymentDate || new Date(),
         manualPaymentReference,
         manualPaymentDetails,
+        relatedExpenseRequestId: expenseRequest.id,
         metadata: {
-          expenseRequestId: expenseRequest.id,
-          processedBy: req.user.id,
-          processedAt: new Date().toISOString(),
-          notes
-        }
+          expenseType: expenseRequest.expenseType,
+          isLoan: expenseRequest.isLoan,
+          notes,
+        },
       });
 
-      // Mettre à jour le statut de la demande
       await expenseRequest.update({
-        status: 'paid',
+        status: "paid",
+        paidAt: new Date(),
         transactionId: transaction.id,
-        paidAt: new Date(paymentDate || new Date()),
-        paymentValidator: req.user.id
       });
 
       res.json({
-        success: true,
-        message: 'Paiement confirmé avec succès',
-        data: {
-          expenseRequest: {
-            id: expenseRequest.id,
-            status: 'paid',
-            paidAt: expenseRequest.paidAt
-          },
-          transaction: {
-            id: transaction.id,
-            amount: transaction.amount,
-            reference: manualPaymentReference
-          }
-        }
+        message: "Paiement enregistré avec succès",
+        transaction,
+        expenseRequest: {
+          id: expenseRequest.id,
+          status: "paid",
+        },
       });
     } catch (error) {
-      console.error('Erreur confirmation paiement:', error);
-      res.status(500).json({
-        error: 'Erreur lors de la confirmation du paiement',
-        code: 'PAYMENT_PROCESS_ERROR',
-        details: error.message
-      });
+      console.error("Erreur paiement:", error);
+      res.status(500).json({ error: "Erreur serveur" });
     }
   }
 
@@ -1675,52 +1638,40 @@ class ExpenseRequestController {
         });
       }
 
-      // ✅ NOUVEAU : Vérifier permissions avec RBAC moderne
+      // ❌ SUPPRIMÉ : Vérification hasPermission("validate_expenses")
+      // Le middleware s'en charge
+
       const membership = req.membership;
-      const canReject =
-        membership?.isAdmin ||
-        hasPermission(membership, "validate_expenses") ||
-        req.user.role === "super_admin";
-
-      if (!canReject) {
-        return res.status(403).json({
-          error: "Permissions insuffisantes",
-          code: "INSUFFICIENT_PERMISSIONS",
-          required: "validate_expenses",
-        });
-      }
-
       const validationHistory = expenseRequest.validationHistory || [];
       validationHistory.push({
         userId: req.user.id,
         role: membership?.assignedRoles?.[0] || "member",
         decision: "rejected",
-        comment: rejectionReason.trim(),
-        timestamp: new Date().toISOString(),
-        user: {
-          firstName: req.user.firstName,
-          lastName: req.user.lastName,
-        },
+        comment: rejectionReason,
+        timestamp: new Date(),
       });
 
       await expenseRequest.update({
         status: "rejected",
         validationHistory,
-        rejectionReason: rejectionReason.trim(),
         rejectedAt: new Date(),
+        rejectedBy: req.user.id,
+        metadata: {
+          ...expenseRequest.metadata,
+          rejectionReason,
+        },
       });
 
       res.json({
-        success: true,
         message: "Demande rejetée",
-        data: { expenseRequest },
+        expenseRequest: {
+          id: expenseRequest.id,
+          status: "rejected",
+        },
       });
     } catch (error) {
       console.error("Erreur rejet:", error);
-      res.status(500).json({
-        error: "Erreur lors du rejet",
-        code: "REJECTION_ERROR",
-      });
+      res.status(500).json({ error: "Erreur serveur" });
     }
   }
 
@@ -1783,6 +1734,82 @@ class ExpenseRequestController {
       res.status(500).json({
         error: "Erreur demande infos",
         code: "INFO_REQUEST_ERROR",
+      });
+    }
+  }
+
+  /**
+   * 📄 Récupérer détails d'une demande de dépense
+   */
+  async getExpenseRequestById(req, res) {
+    try {
+      const { associationId, requestId } = req.params;
+      const userId = req.user.id;
+      const membership = req.membership;
+
+      // Récupérer la demande avec relations
+      const expenseRequest = await ExpenseRequest.findOne({
+        where: {
+          id: parseInt(requestId),
+          associationId: parseInt(associationId),
+        },
+        include: [
+          {
+            model: User,
+            as: "requester",
+            attributes: ["id", "firstName", "lastName", "email", "phoneNumber"],
+          },
+          {
+            model: User,
+            as: "beneficiary",
+            attributes: ["id", "firstName", "lastName", "email", "phoneNumber"],
+          },
+          {
+            model: Section,
+            as: "section",
+            attributes: ["id", "name"],
+          },
+        ],
+      });
+
+      if (!expenseRequest) {
+        return res.status(404).json({
+          error: "Demande de dépense non trouvée",
+          code: "EXPENSE_REQUEST_NOT_FOUND",
+        });
+      }
+
+      // ✅ Vérification d'accès métier (pas de middleware car logique complexe)
+      const isAdmin = membership?.isAdmin || false;
+      const isRequester = expenseRequest.requesterId === userId;
+      const isBeneficiary = expenseRequest.beneficiaryId === userId;
+
+      // Vérifier si l'utilisateur a accès
+      if (!isAdmin && !isRequester && !isBeneficiary) {
+        // Vérifier si membre du bureau avec droits finances
+        const hasFinanceAccess = hasPermission(
+          membership,
+          "finances.view_treasury"
+        );
+
+        if (!hasFinanceAccess) {
+          return res.status(403).json({
+            error: "Accès refusé à cette demande",
+            code: "FORBIDDEN",
+          });
+        }
+      }
+
+      res.json({
+        success: true,
+        data: {
+          expense: expenseRequest,
+        },
+      });
+    } catch (error) {
+      console.error("Erreur récupération demande:", error);
+      res.status(500).json({
+        error: "Erreur lors de la récupération de la demande",
       });
     }
   }

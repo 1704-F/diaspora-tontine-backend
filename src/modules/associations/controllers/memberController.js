@@ -10,8 +10,368 @@ const {
 } = require("../../../models");
 const { Op } = require("sequelize");
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+const { hasPermission } = require("../../../core/middleware/checkPermission");
 
+// 📄 HELPER : GÉNÉRER LE CONTENU D'UN PDF
+// ✅ Fonction standalone (pas une méthode de classe)
+function generateMembersPDF(doc, association, members, rolesConfig, filters) {
+  const { sectionId, memberType, status, search, partNumber, totalParts } = filters;
 
+  // Dimensions pour paysage A4
+  const pageWidth = 842; // A4 paysage
+  const pageHeight = 595;
+  const margin = 30;
+  const usableWidth = pageWidth - (margin * 2);
+
+  // EN-TÊTE avec logo (si disponible)
+  let startY = margin;
+  
+  if (association.theme?.logo) {
+    try {
+      doc.image(association.theme.logo, margin, startY, { width: 40, height: 40 });
+      startY += 50;
+    } catch (err) {
+      console.warn("Impossible de charger le logo:", err.message);
+    }
+  }
+
+  // Titre principal
+  doc
+    .fontSize(18)
+    .font("Helvetica-Bold")
+    .text(association.name, margin, startY, { 
+      align: "center",
+      width: usableWidth 
+    });
+  startY += 25;
+
+  // Sous-titre
+  doc
+    .fontSize(14)
+    .font("Helvetica")
+    .text("Liste des Membres", margin, startY, { 
+      align: "center",
+      width: usableWidth 
+    });
+  startY += 20;
+
+  // Date d'export
+  doc
+    .fontSize(9)
+    .text(
+      `Exporté le ${new Date().toLocaleDateString("fr-FR", {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit"
+      })}`,
+      margin,
+      startY,
+      { align: "center", width: usableWidth }
+    );
+  startY += 15;
+
+  // Si multi-parties
+  if (partNumber && totalParts) {
+    doc
+      .fontSize(9)
+      .fillColor("#666")
+      .text(`Partie ${partNumber} sur ${totalParts}`, margin, startY, { 
+        align: "center",
+        width: usableWidth 
+      })
+      .fillColor("#000");
+    startY += 15;
+  }
+
+  // Filtres appliqués
+  const appliedFilters = [];
+  if (status && status !== "all") appliedFilters.push(`Statut: ${status}`);
+  if (memberType) appliedFilters.push(`Type: ${memberType}`);
+  if (sectionId) appliedFilters.push(`Section ID: ${sectionId}`);
+  if (search) appliedFilters.push(`Recherche: "${search}"`);
+
+  if (appliedFilters.length > 0) {
+    doc
+      .fontSize(8)
+      .fillColor("#666")
+      .text(`Filtres: ${appliedFilters.join(" | ")}`, margin, startY, { 
+        align: "center",
+        width: usableWidth 
+      })
+      .fillColor("#000");
+    startY += 15;
+  }
+
+  // Ligne de séparation horizontale
+  doc
+    .strokeColor("#2c5530")
+    .lineWidth(2)
+    .moveTo(margin, startY)
+    .lineTo(pageWidth - margin, startY)
+    .stroke();
+  startY += 10;
+
+  // ✅ TABLEAU AVEC LIGNES ET COLONNES
+
+  // Largeurs des colonnes (ajustées pour paysage)
+  const colWidths = association.isMultiSection 
+  ? {
+      numero: 40,
+      name: 150,
+      contact: 150,
+      type: 80,
+      roles: 150,
+      section: 132,
+      status: 80,
+    }
+  : {
+      numero: 40,
+      name: 170,
+      contact: 170,
+      type: 100,
+      roles: 222,
+      section: 0,
+      status: 80,
+    };
+
+  // Calculer positions X
+  const colPositions = {
+    numero: margin,
+    name: margin + colWidths.numero,
+    contact: margin + colWidths.numero + colWidths.name,
+    type: margin + colWidths.numero + colWidths.name + colWidths.contact,
+    roles: margin + colWidths.numero + colWidths.name + colWidths.contact + colWidths.type,
+    section: margin + colWidths.numero + colWidths.name + colWidths.contact + colWidths.type + colWidths.roles,
+    status: association.isMultiSection 
+      ? margin + colWidths.numero + colWidths.name + colWidths.contact + colWidths.type + colWidths.roles + colWidths.section
+      : margin + colWidths.numero + colWidths.name + colWidths.contact + colWidths.type + colWidths.roles,
+  };
+
+  const tableEndX = association.isMultiSection 
+    ? colPositions.status + colWidths.status
+    : colPositions.status + colWidths.status;
+
+  // Hauteur de ligne
+  const rowHeight = 30;
+
+  // ✅ EN-TÊTE DU TABLEAU avec fond coloré
+  const headerY = startY;
+  
+  // Fond coloré pour l'en-tête
+  doc
+    .rect(margin, headerY, tableEndX - margin, rowHeight)
+    .fillAndStroke("#2c5530", "#2c5530");
+
+  // Texte en-tête
+  doc
+    .fontSize(9)
+    .font("Helvetica-Bold")
+    .fillColor("#FFFFFF");
+
+  let currentX = colPositions.numero;
+  doc.text("N°", currentX + 5, headerY + 10, { width: colWidths.numero - 10 });
+  
+  currentX = colPositions.name;
+  doc.text("Nom Complet", currentX + 5, headerY + 10, { width: colWidths.name - 10 });
+  
+  currentX = colPositions.contact;
+  doc.text("Contact", currentX + 5, headerY + 10, { width: colWidths.contact - 10 });
+  
+  currentX = colPositions.type;
+  doc.text("Type", currentX + 5, headerY + 10, { width: colWidths.type - 10 });
+  
+  currentX = colPositions.roles;
+  doc.text("Rôles", currentX + 5, headerY + 10, { width: colWidths.roles - 10 });
+  
+  if (association.isMultiSection) {
+    currentX = colPositions.section;
+    doc.text("Section", currentX + 5, headerY + 10, { width: colWidths.section - 10 });
+  }
+  
+  currentX = colPositions.status;
+  doc.text("Statut", currentX + 5, headerY + 10, { width: colWidths.status - 10 });
+
+  doc.fillColor("#000").font("Helvetica");
+
+  let currentY = headerY + rowHeight;
+
+  // ✅ LIGNES DES MEMBRES avec alternance de couleurs
+  members.forEach((member, index) => {
+    // Vérifier si on doit changer de page
+    if (currentY + rowHeight > pageHeight - margin - 40) {
+      doc.addPage({ 
+        margin: 30,
+        size: 'A4',
+        layout: 'landscape' 
+      });
+      currentY = margin;
+
+      // Redessiner l'en-tête sur la nouvelle page
+      doc
+        .rect(margin, currentY, tableEndX - margin, rowHeight)
+        .fillAndStroke("#2c5530", "#2c5530");
+
+      doc
+        .fontSize(9)
+        .font("Helvetica-Bold")
+        .fillColor("#FFFFFF");
+
+      currentX = colPositions.numero;
+      doc.text("N°", currentX + 5, currentY + 10, { width: colWidths.numero - 10 });
+      currentX = colPositions.name;
+      doc.text("Nom Complet", currentX + 5, currentY + 10, { width: colWidths.name - 10 });
+      currentX = colPositions.contact;
+      doc.text("Contact", currentX + 5, currentY + 10, { width: colWidths.contact - 10 });
+      currentX = colPositions.type;
+      doc.text("Type", currentX + 5, currentY + 10, { width: colWidths.type - 10 });
+      currentX = colPositions.roles;
+      doc.text("Rôles", currentX + 5, currentY + 10, { width: colWidths.roles - 10 });
+      
+      if (association.isMultiSection) {
+        currentX = colPositions.section;
+        doc.text("Section", currentX + 5, currentY + 10, { width: colWidths.section - 10 });
+      }
+      
+      currentX = colPositions.status;
+      doc.text("Statut", currentX + 5, currentY + 10, { width: colWidths.status - 10 });
+
+      doc.fillColor("#000").font("Helvetica");
+      currentY += rowHeight;
+    }
+
+    // ✅ Alternance de couleurs pour les lignes
+    if (index % 2 === 0) {
+      doc
+        .rect(margin, currentY, tableEndX - margin, rowHeight)
+        .fill("#F9FAFB");
+    }
+
+    // Numéro
+    doc
+      .fontSize(8)
+      .fillColor("#000")
+      .text(
+        (index + 1).toString(),
+        colPositions.numero + 5,
+        currentY + 10,
+        { width: colWidths.numero - 10, align: "center" }
+      );
+
+    // Nom
+    doc.text(
+      `${member.user.firstName} ${member.user.lastName}`,
+      colPositions.name + 5,
+      currentY + 10,
+      { width: colWidths.name - 10, ellipsis: true }
+    );
+
+    // Contact
+    const contact = member.user.phoneNumber || member.user.email || "-";
+    doc.text(contact, colPositions.contact + 5, currentY + 10, {
+      width: colWidths.contact - 10,
+      ellipsis: true,
+    });
+
+    // Type
+    doc.text(member.memberType || "-", colPositions.type + 5, currentY + 10, {
+      width: colWidths.type - 10,
+      ellipsis: true,
+    });
+
+    // Rôles
+    const roleNames =
+      member.assignedRoles && member.assignedRoles.length > 0
+        ? member.assignedRoles
+            .map((roleId) => {
+              const role = rolesConfig.find((r) => r.id === roleId);
+              return role?.name || roleId;
+            })
+            .join(", ")
+        : "-";
+    doc.text(roleNames, colPositions.roles + 5, currentY + 10, {
+      width: colWidths.roles - 10,
+      ellipsis: true,
+    });
+
+    // Section (si multi-sections)
+    if (association.isMultiSection) {
+      doc.text(member.section?.name || "-", colPositions.section + 5, currentY + 10, {
+        width: colWidths.section - 10,
+        ellipsis: true,
+      });
+    }
+
+    // Statut
+    const statusLabel =
+      {
+        active: "Actif",
+        pending: "En attente",
+        inactive: "Inactif",
+        suspended: "Suspendu",
+      }[member.status] || member.status;
+    doc.text(statusLabel, colPositions.status + 5, currentY + 10, {
+      width: colWidths.status - 10,
+      ellipsis: true,
+    });
+
+    // ✅ LIGNES HORIZONTALES
+    doc
+      .strokeColor("#E5E7EB")
+      .lineWidth(0.5)
+      .moveTo(margin, currentY + rowHeight)
+      .lineTo(tableEndX, currentY + rowHeight)
+      .stroke();
+
+    currentY += rowHeight;
+  });
+
+  // ✅ LIGNES VERTICALES (colonnes)
+  doc.strokeColor("#E5E7EB").lineWidth(0.5);
+
+  // Calculer hauteur totale du tableau
+  const tableStartY = headerY;
+  const tableHeight = currentY - tableStartY;
+
+  // Dessiner les séparateurs verticaux
+  Object.values(colPositions).forEach((xPos) => {
+    doc
+      .moveTo(xPos, tableStartY)
+      .lineTo(xPos, currentY)
+      .stroke();
+  });
+
+  // Dernière ligne verticale (bord droit)
+  doc
+    .moveTo(tableEndX, tableStartY)
+    .lineTo(tableEndX, currentY)
+    .stroke();
+
+  // ✅ Footer avec total et signature
+  currentY += 20;
+  
+  doc
+    .fontSize(10)
+    .font("Helvetica-Bold")
+    .fillColor("#2c5530")
+    .text(`Total: ${members.length} membre(s)`, margin, currentY, { 
+      align: "left",
+      width: usableWidth / 2 
+    });
+
+  doc
+    .fontSize(8)
+    .font("Helvetica")
+    .fillColor("#666")
+    .text(
+      `Document généré par DiasporaTontine`,
+      margin + (usableWidth / 2),
+      currentY,
+      { align: "right", width: usableWidth / 2 }
+    )
+    .fillColor("#000");
+}
 
 
 class MemberController {
@@ -19,556 +379,33 @@ class MemberController {
    
 
   async addMember(req, res) {
-    try {
-      const { associationId } = req.params;
-      const {
-        userId,
-        firstName,
-        lastName,
-        phoneNumber,
-        email,
-        dateOfBirth,
-        gender,
-        address,
-        city,
-        country,
-        postalCode,
-        memberType,
-        sectionId,
-        status = "pending",
-        cotisationAmount,
-        assignedRoles,
-        autoPaymentEnabled,
-        paymentMethodId,
-      } = req.body;
-
-      // Vérifier accès association avec permissions
-      const membership = await AssociationMember.findOne({
-        where: {
-          userId: req.user.id,
-          associationId,
-          status: "active",
-        },
-        include: [
-          {
-            model: Association,
-            as: "association",
-            attributes: ["rolesConfiguration"],
-          },
-        ],
-      });
-
-      // Vérifier permissions avec RBAC moderne
-      const canAddMember =
-        membership?.isAdmin ||
-        hasPermission(membership, "manage_members") ||
-        req.user.role === "super_admin";
-
-      if (!canAddMember) {
-        return res.status(403).json({
-          error: "Permission insuffisante pour ajouter un membre",
-          code: "ADD_MEMBER_DENIED",
-          required: "manage_members",
-        });
-      }
-
-      // Déterminer l'utilisateur cible
-      let targetUser;
-
-      if (userId) {
-        // Cas 1: userId fourni explicitement
-        targetUser = await User.findByPk(userId);
-        if (!targetUser) {
-          return res.status(404).json({
-            error: "Utilisateur introuvable",
-            code: "USER_NOT_FOUND",
-          });
-        }
-      } else if (firstName && lastName && phoneNumber) {
-        // Cas 2: Créer un nouveau membre avec ses infos
-        targetUser = await User.findOne({
-          where: { phoneNumber: phoneNumber.trim() },
-        });
-
-        if (!targetUser) {
-          targetUser = await User.create({
-            firstName: firstName.trim(),
-            lastName: lastName.trim(),
-            phoneNumber: phoneNumber.trim(),
-            email: email ? email.trim() : null,
-            dateOfBirth: dateOfBirth || null,
-            gender: gender || null,
-            address: address ? address.trim() : null,
-            city: city ? city.trim() : null,
-            country: country || "FR",
-            postalCode: postalCode ? postalCode.trim() : null,
-            status: "pending_verification",
-          });
-
-          console.log(`✅ Nouvel utilisateur créé:`, {
-            id: targetUser.id,
-            firstName: targetUser.firstName,
-            lastName: targetUser.lastName,
-            phoneNumber: targetUser.phoneNumber,
-          });
-        } else {
-          console.log(`✅ Utilisateur existant trouvé: ${targetUser.firstName} ${targetUser.lastName}`);
-        }
-      } else {
-        // ✅ CAS 3: Aucun userId/infos fourni → utiliser l'utilisateur courant (req.user.id)
-        // Ce cas arrive quand l'admin créateur se convertit lui-même en membre
-        console.log(`🔄 Aucun userId/infos fourni → utilisation req.user.id (${req.user.id})`);
-        
-        targetUser = await User.findByPk(req.user.id);
-        if (!targetUser) {
-          return res.status(404).json({
-            error: "Utilisateur courant introuvable",
-            code: "CURRENT_USER_NOT_FOUND",
-          });
-        }
-        
-        console.log(`✅ Utilisateur courant trouvé: ${targetUser.firstName} ${targetUser.lastName}`);
-      }
-
-      // ============================================
-      // ✅ VÉRIFIER SI DÉJÀ MEMBRE
-      // ============================================
-      const existingMembership = await AssociationMember.findOne({
-        where: {
-          userId: targetUser.id,
-          associationId,
-        },
-      });
-
-      if (existingMembership) {
-        // ✅ CAS SPÉCIAL : Admin externe qui devient membre interne
-        if (existingMembership.isAdmin && !existingMembership.isMemberOfAssociation) {
-          console.log(`🔄 Conversion admin externe → membre interne pour userId ${targetUser.id}`);
-
-          // Récupérer config association pour validation
-          const association = await Association.findByPk(associationId);
-          const memberTypesConfig = association.memberTypes || [];
-          const memberTypeExists = memberTypesConfig.find(
-            (type) => type.name === memberType
-          );
-
-          if (!memberTypeExists) {
-            return res.status(400).json({
-              error: "Type de membre invalide",
-              code: "INVALID_MEMBER_TYPE",
-              available: memberTypesConfig.map((type) => type.name),
-            });
-          }
-
-          // Valider les rôles assignés
-          if (assignedRoles && assignedRoles.length > 0) {
-            const rolesConfig = association.rolesConfiguration?.roles || [];
-            const invalidRoles = assignedRoles.filter(
-              (roleId) => !rolesConfig.find((r) => r.id === roleId)
-            );
-
-            if (invalidRoles.length > 0) {
-              return res.status(400).json({
-                error: "Rôles invalides",
-                code: "INVALID_ROLES",
-                invalidRoles,
-                availableRoles: rolesConfig.map((r) => ({ id: r.id, name: r.name })),
-              });
-            }
-          }
-
-          // Déterminer montant cotisation
-          const finalCotisationAmount =
-            cotisationAmount !== undefined ? cotisationAmount : memberTypeExists.cotisationAmount;
-
-          // ✅ METTRE À JOUR le membership existant
-          await existingMembership.update({
-            memberType,
-            assignedRoles: assignedRoles || [],
-            cotisationAmount: finalCotisationAmount,
-            isMemberOfAssociation: true, // ✅ Devient membre réel
-            status: status || "pending",
-            approvedDate: status === "active" ? new Date() : null,
-            approvedBy: status === "active" ? req.user.id : null,
-            autoPaymentEnabled: autoPaymentEnabled || false,
-            paymentMethodId: paymentMethodId || null,
-            sectionId: sectionId || null,
-          });
-
-          console.log(`✅ Admin converti en membre avec succès - Type: ${memberType}, Rôles: ${assignedRoles?.length || 0}`);
-
-          // Charger membre complet pour retour
-          const memberComplete = await AssociationMember.findByPk(existingMembership.id, {
-            include: [
-              {
-                model: User,
-                as: "user",
-                attributes: [
-                  "id",
-                  "firstName",
-                  "lastName",
-                  "phoneNumber",
-                  "email",
-                  "dateOfBirth",
-                  "gender",
-                  "address",
-                  "city",
-                  "country",
-                  "postalCode",
-                ],
-              },
-              {
-                model: Section,
-                as: "section",
-                attributes: ["id", "name", "country"],
-              },
-              { model: Association, as: "association", attributes: ["id", "name"] },
-            ],
-          });
-
-          return res.status(200).json({
-            success: true,
-            message: "Admin converti en membre interne avec succès",
-            data: { member: memberComplete },
-          });
-        }
-
-        // ❌ Sinon, c'est vraiment un doublon
-        return res.status(400).json({
-          error: "Cet utilisateur est déjà membre de l'association",
-          code: "ALREADY_MEMBER",
-          currentStatus: existingMembership.status,
-          isMemberOfAssociation: existingMembership.isMemberOfAssociation,
-        });
-      }
-
-      // ============================================
-      // ✅ CRÉER NOUVEAU MEMBRE
-      // ============================================
-
-      // Récupérer config association pour validation
-      const association = await Association.findByPk(associationId);
-      const memberTypesConfig = association.memberTypes || [];
-      const memberTypeExists = memberTypesConfig.find(
-        (type) => type.name === memberType
-      );
-
-      if (!memberTypeExists) {
-        return res.status(400).json({
-          error: "Type de membre invalide",
-          code: "INVALID_MEMBER_TYPE",
-          available: memberTypesConfig.map((type) => type.name),
-        });
-      }
-
-      // Si section spécifiée, vérifier qu'elle existe
-      if (sectionId) {
-        const section = await Section.findOne({
-          where: { id: sectionId, associationId },
-        });
-
-        if (!section) {
-          return res.status(404).json({
-            error: "Section introuvable",
-            code: "SECTION_NOT_FOUND",
-          });
-        }
-      }
-
-      // Valider les rôles assignés
-      if (assignedRoles && assignedRoles.length > 0) {
-        const rolesConfig = association.rolesConfiguration?.roles || [];
-        const invalidRoles = assignedRoles.filter(
-          (roleId) => !rolesConfig.find((r) => r.id === roleId)
-        );
-
-        if (invalidRoles.length > 0) {
-          return res.status(400).json({
-            error: "Rôles invalides",
-            code: "INVALID_ROLES",
-            invalidRoles,
-            availableRoles: rolesConfig.map((r) => ({ id: r.id, name: r.name })),
-          });
-        }
-
-        console.log(
-          `✅ Rôles validés:`,
-          assignedRoles.map(
-            (roleId) => rolesConfig.find((r) => r.id === roleId)?.name
-          )
-        );
-      }
-
-      // Déterminer montant cotisation
-      const finalCotisationAmount =
-        cotisationAmount !== undefined ? cotisationAmount : memberTypeExists.cotisationAmount;
-
-      // ✅ Créer membre avec assignedRoles
-      const member = await AssociationMember.create({
-        userId: targetUser.id,
-        associationId,
-        sectionId,
-        memberType,
-        status,
-        cotisationAmount: finalCotisationAmount,
-        autoPaymentEnabled: autoPaymentEnabled || false,
-        paymentMethodId: paymentMethodId || null,
-        joinDate: new Date(),
-        approvedDate: status === "active" ? new Date() : null,
-        approvedBy: status === "active" ? req.user.id : null,
-        isMemberOfAssociation: true, // ✅ Membre réel par défaut
-        isAdmin: false,
-        assignedRoles: assignedRoles || [],
-        customPermissions: { granted: [], revoked: [] },
-      });
-
-      console.log(
-        `✅ Membre créé avec ${assignedRoles?.length || 0} rôle(s):`,
-        assignedRoles
-      );
-
-      // Charger membre complet pour retour
-      const memberComplete = await AssociationMember.findByPk(member.id, {
-        include: [
-          {
-            model: User,
-            as: "user",
-            attributes: [
-              "id",
-              "firstName",
-              "lastName",
-              "phoneNumber",
-              "email",
-              "dateOfBirth",
-              "gender",
-              "address",
-              "city",
-              "country",
-              "postalCode",
-            ],
-          },
-          {
-            model: Section,
-            as: "section",
-            attributes: ["id", "name", "country"],
-          },
-          { model: Association, as: "association", attributes: ["id", "name"] },
-        ],
-      });
-
-      res.status(201).json({
-        success: true,
-        message: "Membre ajouté avec succès",
-        data: { member: memberComplete },
-      });
-    } catch (error) {
-      console.error("❌ Erreur ajout membre:", error);
-      res.status(500).json({
-        error: "Erreur ajout membre",
-        code: "ADD_MEMBER_ERROR",
-        details: error.message,
-      });
-    }
-  }
-
-  async updateMember(req, res) {
-    try {
-      const { associationId, memberId } = req.params;
-      const {
-        memberType,
-        status,
-        sectionId,
-        assignedRoles,
-        cotisationAmount,
-        autoPaymentEnabled,
-        paymentMethodId,
-      } = req.body;
-
-      // Vérifier accès association avec permissions
-      const membership = await AssociationMember.findOne({
-        where: {
-          userId: req.user.id,
-          associationId,
-          status: "active",
-        },
-        include: [
-          {
-            model: Association,
-            as: "association",
-            attributes: ["rolesConfiguration", "memberTypes"],
-          },
-        ],
-      });
-
-      const canUpdateMember =
-        membership?.isAdmin ||
-        hasPermission(membership, "manage_members") ||
-        req.user.role === "super_admin";
-
-      if (!canUpdateMember) {
-        return res.status(403).json({
-          error: "Permission insuffisante pour modifier un membre",
-          code: "UPDATE_MEMBER_DENIED",
-          required: "manage_members",
-        });
-      }
-
-      // Récupérer le membre à modifier
-      const memberToUpdate = await AssociationMember.findOne({
-        where: {
-          id: memberId,
-          associationId,
-        },
-        include: [
-          {
-            model: User,
-            as: "user",
-            attributes: ["id", "firstName", "lastName", "phoneNumber"],
-          },
-        ],
-      });
-
-      if (!memberToUpdate) {
-        return res.status(404).json({
-          error: "Membre introuvable",
-          code: "MEMBER_NOT_FOUND",
-        });
-      }
-
-      // Protection admin : vérifier s'il reste d'autres admins
-      if (memberToUpdate.isAdmin && status === "suspended") {
-        const otherAdmins = await AssociationMember.count({
-          where: {
-            associationId,
-            status: "active",
-            isAdmin: true,
-            id: { [Op.ne]: memberId },
-          },
-        });
-
-        if (otherAdmins === 0) {
-          return res.status(400).json({
-            error: "Impossible de suspendre : aucun autre administrateur actif",
-            code: "LAST_ADMIN_PROTECTION",
-          });
-        }
-      }
-
-      // Vérifier section si fournie
-      if (sectionId) {
-        const sectionExists = await Section.findOne({
-          where: { id: sectionId, associationId },
-        });
-
-        if (!sectionExists) {
-          return res.status(400).json({
-            error: "Section introuvable",
-            code: "SECTION_NOT_FOUND",
-          });
-        }
-      }
-
-      // Préparer les données de mise à jour
-      const updateData = {};
-
-      if (memberType !== undefined) {
-        const memberTypesConfig = membership.association.memberTypes || [];
-        const memberTypeExists = memberTypesConfig.find((t) => t.name === memberType);
-
-        if (!memberTypeExists) {
-          return res.status(400).json({
-            error: "Type de membre invalide",
-            code: "INVALID_MEMBER_TYPE",
-            available: memberTypesConfig.map((t) => t.name),
-          });
-        }
-
-        updateData.memberType = memberType;
-        if (cotisationAmount === undefined) {
-          updateData.cotisationAmount = memberTypeExists.cotisationAmount;
-        }
-      }
-
-      if (status !== undefined) updateData.status = status;
-      if (sectionId !== undefined) updateData.sectionId = sectionId;
-      if (cotisationAmount !== undefined) updateData.cotisationAmount = cotisationAmount;
-      if (autoPaymentEnabled !== undefined) updateData.autoPaymentEnabled = autoPaymentEnabled;
-      if (paymentMethodId !== undefined) updateData.paymentMethodId = paymentMethodId;
-
-      // Valider et mettre à jour les rôles
-      if (assignedRoles !== undefined) {
-        const rolesConfig = membership.association.rolesConfiguration?.roles || [];
-        const invalidRoles = assignedRoles.filter(
-          (roleId) => !rolesConfig.find((r) => r.id === roleId)
-        );
-
-        if (invalidRoles.length > 0) {
-          return res.status(400).json({
-            error: "Rôles invalides",
-            code: "INVALID_ROLES",
-            invalidRoles,
-            availableRoles: rolesConfig.map((r) => ({ id: r.id, name: r.name })),
-          });
-        }
-
-        updateData.assignedRoles = assignedRoles;
-      }
-
-      // Mettre à jour le membre
-      await memberToUpdate.update(updateData);
-
-      // Charger membre mis à jour
-      const updatedMember = await AssociationMember.findByPk(memberToUpdate.id, {
-        include: [
-          {
-            model: User,
-            as: "user",
-            attributes: [
-              "id",
-              "firstName",
-              "lastName",
-              "phoneNumber",
-              "email",
-              "profilePicture",
-            ],
-          },
-          {
-            model: Section,
-            as: "section",
-            attributes: ["id", "name", "country"],
-          },
-        ],
-      });
-
-      res.json({
-        success: true,
-        message: "Membre mis à jour avec succès",
-        data: { member: updatedMember },
-      });
-    } catch (error) {
-      console.error("❌ Erreur modification membre:", error);
-      res.status(500).json({
-        error: "Erreur modification membre",
-        code: "UPDATE_MEMBER_ERROR",
-        details: error.message,
-      });
-    }
-  }
-
-  // 📋 LISTER MEMBRES ASSOCIATION
-async listMembers(req, res) {
   try {
     const { associationId } = req.params;
     const {
-      sectionId,
+      userId,
+      firstName,
+      lastName,
+      phoneNumber,
+      email,
+      dateOfBirth,
+      gender,
+      address,
+      city,
+      country,
+      postalCode,
       memberType,
-      status = "all",
-      page = 1,
-      limit = 50,
-      search,
-    } = req.query;
+      sectionId,
+      status = "pending",
+      cotisationAmount,
+      assignedRoles,
+      autoPaymentEnabled,
+      paymentMethodId,
+      profession,
+      emergencyContact,
+      notes,
+    } = req.body;
 
-    // Vérifier accès association
+    // Vérifier accès association avec permissions
     const membership = await AssociationMember.findOne({
       where: {
         userId: req.user.id,
@@ -584,23 +421,674 @@ async listMembers(req, res) {
       ],
     });
 
-    const canViewMembers =
+    // Vérifier permissions avec RBAC moderne
+    const canAddMember =
       membership?.isAdmin ||
-      hasPermission(membership, "view_members") ||
+      hasPermission(membership, "manage_members") ||
       req.user.role === "super_admin";
 
-    if (!canViewMembers) {
+    if (!canAddMember) {
       return res.status(403).json({
-        error: "Permission insuffisante pour voir les membres",
-        code: "VIEW_MEMBERS_DENIED",
-        required: "view_members",
+        error: "Permission insuffisante pour ajouter un membre",
+        code: "ADD_MEMBER_DENIED",
+        required: "manage_members",
       });
     }
 
+    // Déterminer l'utilisateur cible
+    let targetUser;
+
+    if (userId) {
+      // Cas 1: userId fourni explicitement
+      targetUser = await User.findByPk(userId);
+      if (!targetUser) {
+        return res.status(404).json({
+          error: "Utilisateur introuvable",
+          code: "USER_NOT_FOUND",
+        });
+      }
+    } else if (firstName && lastName && phoneNumber) {
+      // Cas 2: Créer un nouveau membre avec ses infos
+      targetUser = await User.findOne({
+        where: { phoneNumber: phoneNumber.trim() },
+      });
+
+      if (!targetUser) {
+        targetUser = await User.create({
+          firstName: firstName.trim(),
+          lastName: lastName.trim(),
+          phoneNumber: phoneNumber.trim(),
+          email: email ? email.trim() : null,
+          dateOfBirth: dateOfBirth || null,
+          gender: gender || null,
+          address: address ? address.trim() : null,
+          city: city ? city.trim() : null,
+          country: country || "FR",
+          postalCode: postalCode ? postalCode.trim() : null,
+          status: "pending_verification",
+        });
+
+        console.log(`✅ Nouvel utilisateur créé:`, {
+          id: targetUser.id,
+          firstName: targetUser.firstName,
+          lastName: targetUser.lastName,
+          phoneNumber: targetUser.phoneNumber,
+        });
+      } else {
+        console.log(`✅ Utilisateur existant trouvé: ${targetUser.firstName} ${targetUser.lastName}`);
+      }
+    } else {
+      // ✅ CAS 3: Aucun userId/infos fourni → utiliser l'utilisateur courant (req.user.id)
+      console.log(`🔄 Aucun userId/infos fourni → utilisation req.user.id (${req.user.id})`);
+      
+      targetUser = await User.findByPk(req.user.id);
+      if (!targetUser) {
+        return res.status(404).json({
+          error: "Utilisateur courant introuvable",
+          code: "CURRENT_USER_NOT_FOUND",
+        });
+      }
+      
+      console.log(`✅ Utilisateur courant trouvé: ${targetUser.firstName} ${targetUser.lastName}`);
+    }
+
+    // ============================================
+    // ✅ VÉRIFIER SI DÉJÀ MEMBRE
+    // ============================================
+    const existingMembership = await AssociationMember.findOne({
+      where: {
+        userId: targetUser.id,
+        associationId,
+      },
+    });
+
+    if (existingMembership) {
+      // ✅ CAS SPÉCIAL : Admin externe qui devient membre interne
+      if (existingMembership.isAdmin && !existingMembership.isMemberOfAssociation) {
+        console.log(`🔄 Conversion admin externe → membre interne pour userId ${targetUser.id}`);
+
+        // Récupérer config association pour validation
+        const association = await Association.findByPk(associationId);
+        const memberTypesConfig = association.memberTypes || [];
+        const memberTypeExists = memberTypesConfig.find(
+          (type) => type.name === memberType
+        );
+
+        if (!memberTypeExists) {
+          return res.status(400).json({
+            error: "Type de membre invalide",
+            code: "INVALID_MEMBER_TYPE",
+            available: memberTypesConfig.map((type) => type.name),
+          });
+        }
+
+        // Valider les rôles assignés
+        if (assignedRoles && assignedRoles.length > 0) {
+          const rolesConfig = association.rolesConfiguration?.roles || [];
+          const invalidRoles = assignedRoles.filter(
+            (roleId) => !rolesConfig.find((r) => r.id === roleId)
+          );
+
+          if (invalidRoles.length > 0) {
+            return res.status(400).json({
+              error: "Rôles invalides",
+              code: "INVALID_ROLES",
+              invalidRoles,
+              availableRoles: rolesConfig.map((r) => ({ id: r.id, name: r.name })),
+            });
+          }
+
+          // ✅ NOUVEAU : Vérifier les rôles uniques
+          const uniqueRolesToAssign = assignedRoles.filter((roleId) => {
+            const role = rolesConfig.find((r) => r.id === roleId);
+            return role?.isUnique === true;
+          });
+
+          if (uniqueRolesToAssign.length > 0) {
+            const existingMembers = await AssociationMember.findAll({
+              where: {
+                associationId,
+                status: 'active',
+                id: { [Op.ne]: existingMembership.id }, // Exclure le membre actuel
+              },
+              attributes: ['id', 'assignedRoles'],
+              include: [
+                {
+                  model: User,
+                  as: 'user',
+                  attributes: ['firstName', 'lastName'],
+                },
+              ],
+            });
+
+            const conflicts = [];
+            
+            for (const uniqueRoleId of uniqueRolesToAssign) {
+              const conflictMember = existingMembers.find((m) =>
+                m.assignedRoles?.includes(uniqueRoleId)
+              );
+
+              if (conflictMember) {
+                const roleName = rolesConfig.find((r) => r.id === uniqueRoleId)?.name;
+                conflicts.push({
+                  roleId: uniqueRoleId,
+                  roleName,
+                  assignedTo: `${conflictMember.user.firstName} ${conflictMember.user.lastName}`,
+                  memberId: conflictMember.id,
+                });
+              }
+            }
+
+            if (conflicts.length > 0) {
+              return res.status(400).json({
+                error: "Rôle(s) unique(s) déjà attribué(s)",
+                code: "UNIQUE_ROLE_CONFLICT",
+                conflicts,
+              });
+            }
+          }
+        }
+
+        // Déterminer montant cotisation
+        const finalCotisationAmount =
+          cotisationAmount !== undefined ? cotisationAmount : memberTypeExists.cotisationAmount;
+
+        // ✅ METTRE À JOUR le membership existant
+        await existingMembership.update({
+          memberType,
+          assignedRoles: assignedRoles || [],
+          cotisationAmount: finalCotisationAmount,
+          isMemberOfAssociation: true,
+          status: status || "pending",
+          approvedDate: status === "active" ? new Date() : null,
+          approvedBy: status === "active" ? req.user.id : null,
+          autoPaymentEnabled: autoPaymentEnabled || false,
+          paymentMethodId: paymentMethodId || null,
+          sectionId: sectionId || null,
+        });
+
+        console.log(`✅ Admin converti en membre avec succès - Type: ${memberType}, Rôles: ${assignedRoles?.length || 0}`);
+
+        // Charger membre complet pour retour
+        const memberComplete = await AssociationMember.findByPk(existingMembership.id, {
+          include: [
+            {
+              model: User,
+              as: "user",
+              attributes: [
+                "id",
+                "firstName",
+                "lastName",
+                "phoneNumber",
+                "email",
+                "dateOfBirth",
+                "gender",
+                "address",
+                "city",
+                "country",
+                "postalCode",
+              ],
+            },
+            {
+              model: Section,
+              as: "section",
+              attributes: ["id", "name", "country"],
+            },
+            { model: Association, as: "association", attributes: ["id", "name"] },
+          ],
+        });
+
+        return res.status(200).json({
+          success: true,
+          message: "Admin converti en membre interne avec succès",
+          data: { member: memberComplete },
+        });
+      }
+
+      // ❌ Sinon, c'est vraiment un doublon
+      return res.status(400).json({
+        error: "Cet utilisateur est déjà membre de l'association",
+        code: "ALREADY_MEMBER",
+        currentStatus: existingMembership.status,
+        isMemberOfAssociation: existingMembership.isMemberOfAssociation,
+      });
+    }
+
+    // ============================================
+    // ✅ CRÉER NOUVEAU MEMBRE
+    // ============================================
+
+    // Récupérer config association pour validation
+    const association = await Association.findByPk(associationId);
+    const memberTypesConfig = association.memberTypes || [];
+    const memberTypeExists = memberTypesConfig.find(
+      (type) => type.name === memberType
+    );
+
+    if (!memberTypeExists) {
+      return res.status(400).json({
+        error: "Type de membre invalide",
+        code: "INVALID_MEMBER_TYPE",
+        available: memberTypesConfig.map((type) => type.name),
+      });
+    }
+
+    // Si section spécifiée, vérifier qu'elle existe
+    if (sectionId) {
+      const section = await Section.findOne({
+        where: { id: sectionId, associationId },
+      });
+
+      if (!section) {
+        return res.status(404).json({
+          error: "Section introuvable",
+          code: "SECTION_NOT_FOUND",
+        });
+      }
+    }
+
+    // Valider les rôles assignés
+    if (assignedRoles && assignedRoles.length > 0) {
+      const rolesConfig = association.rolesConfiguration?.roles || [];
+      const invalidRoles = assignedRoles.filter(
+        (roleId) => !rolesConfig.find((r) => r.id === roleId)
+      );
+
+      if (invalidRoles.length > 0) {
+        return res.status(400).json({
+          error: "Rôles invalides",
+          code: "INVALID_ROLES",
+          invalidRoles,
+          availableRoles: rolesConfig.map((r) => ({ id: r.id, name: r.name })),
+        });
+      }
+
+      // ✅ NOUVEAU : Vérifier les rôles uniques
+      const uniqueRolesToAssign = assignedRoles.filter((roleId) => {
+        const role = rolesConfig.find((r) => r.id === roleId);
+        return role?.isUnique === true;
+      });
+
+      if (uniqueRolesToAssign.length > 0) {
+        const existingMembers = await AssociationMember.findAll({
+          where: {
+            associationId,
+            status: 'active',
+          },
+          attributes: ['id', 'assignedRoles'],
+          include: [
+            {
+              model: User,
+              as: 'user',
+              attributes: ['firstName', 'lastName'],
+            },
+          ],
+        });
+
+        const conflicts = [];
+        
+        for (const uniqueRoleId of uniqueRolesToAssign) {
+          const conflictMember = existingMembers.find((m) =>
+            m.assignedRoles?.includes(uniqueRoleId)
+          );
+
+          if (conflictMember) {
+            const roleName = rolesConfig.find((r) => r.id === uniqueRoleId)?.name;
+            conflicts.push({
+              roleId: uniqueRoleId,
+              roleName,
+              assignedTo: `${conflictMember.user.firstName} ${conflictMember.user.lastName}`,
+              memberId: conflictMember.id,
+            });
+          }
+        }
+
+        if (conflicts.length > 0) {
+          return res.status(400).json({
+            error: "Rôle(s) unique(s) déjà attribué(s)",
+            code: "UNIQUE_ROLE_CONFLICT",
+            conflicts,
+          });
+        }
+      }
+
+      console.log(
+        `✅ Rôles validés:`,
+        assignedRoles.map(
+          (roleId) => rolesConfig.find((r) => r.id === roleId)?.name
+        )
+      );
+    }
+
+    // Déterminer montant cotisation
+    const finalCotisationAmount =
+      cotisationAmount !== undefined ? cotisationAmount : memberTypeExists.cotisationAmount;
+
+    // ✅ Créer membre avec assignedRoles
+    const member = await AssociationMember.create({
+      userId: targetUser.id,
+      associationId,
+      sectionId,
+      memberType,
+      profession,
+      emergencyContact,
+      notes,
+      status: "active",
+      cotisationAmount: finalCotisationAmount,
+      autoPaymentEnabled: autoPaymentEnabled || false,
+      paymentMethodId: paymentMethodId || null,
+      joinDate: new Date(),
+      approvedDate: status === "active" ? new Date() : null,
+      approvedBy: status === "active" ? req.user.id : null,
+      isMemberOfAssociation: true,
+      isAdmin: false,
+      assignedRoles: assignedRoles || [],
+      customPermissions: { granted: [], revoked: [] },
+    });
+
+    console.log(
+      `✅ Membre créé avec ${assignedRoles?.length || 0} rôle(s):`,
+      assignedRoles
+    );
+
+    // Charger membre complet pour retour
+    const memberComplete = await AssociationMember.findByPk(member.id, {
+      include: [
+        {
+          model: User,
+          as: "user",
+          attributes: [
+            "id",
+            "firstName",
+            "lastName",
+            "phoneNumber",
+            "email",
+            "dateOfBirth",
+            "gender",
+            "address",
+            "city",
+            "country",
+            "postalCode",
+          ],
+        },
+        {
+          model: Section,
+          as: "section",
+          attributes: ["id", "name", "country"],
+        },
+        { model: Association, as: "association", attributes: ["id", "name"] },
+      ],
+    });
+
+    res.status(201).json({
+      success: true,
+      message: "Membre ajouté avec succès",
+      data: { member: memberComplete },
+    });
+  } catch (error) {
+    console.error("❌ Erreur ajout membre:", error);
+    res.status(500).json({
+      error: "Erreur ajout membre",
+      code: "ADD_MEMBER_ERROR",
+      details: error.message,
+    });
+  }
+}
+
+  async updateMember(req, res) {
+  try {
+    const { associationId, memberId } = req.params;
+    const {
+      memberType,
+      status,
+      sectionId,
+      assignedRoles,
+      cotisationAmount,
+      autoPaymentEnabled,
+      paymentMethodId,
+    } = req.body;
+
+    // Vérifier accès association avec permissions
+    const membership = await AssociationMember.findOne({
+      where: {
+        userId: req.user.id,
+        associationId,
+        status: "active",
+      },
+      include: [
+        {
+          model: Association,
+          as: "association",
+          attributes: ["rolesConfiguration", "memberTypes"],
+        },
+      ],
+    });
+
+    const canUpdateMember =
+      membership?.isAdmin ||
+      hasPermission(membership, "manage_members") ||
+      req.user.role === "super_admin";
+
+    if (!canUpdateMember) {
+      return res.status(403).json({
+        error: "Permission insuffisante pour modifier un membre",
+        code: "UPDATE_MEMBER_DENIED",
+        required: "manage_members",
+      });
+    }
+
+    // Récupérer le membre à modifier
+    const memberToUpdate = await AssociationMember.findOne({
+      where: {
+        id: memberId,
+        associationId,
+      },
+      include: [
+        {
+          model: User,
+          as: "user",
+          attributes: ["id", "firstName", "lastName", "phoneNumber"],
+        },
+      ],
+    });
+
+    if (!memberToUpdate) {
+      return res.status(404).json({
+        error: "Membre introuvable",
+        code: "MEMBER_NOT_FOUND",
+      });
+    }
+
+    // Protection admin : vérifier s'il reste d'autres admins
+    if (memberToUpdate.isAdmin && status === "suspended") {
+      const otherAdmins = await AssociationMember.count({
+        where: {
+          associationId,
+          status: "active",
+          isAdmin: true,
+          id: { [Op.ne]: memberId },
+        },
+      });
+
+      if (otherAdmins === 0) {
+        return res.status(400).json({
+          error: "Impossible de suspendre : aucun autre administrateur actif",
+          code: "LAST_ADMIN_PROTECTION",
+        });
+      }
+    }
+
+    // Vérifier section si fournie
+    if (sectionId) {
+      const sectionExists = await Section.findOne({
+        where: { id: sectionId, associationId },
+      });
+
+      if (!sectionExists) {
+        return res.status(400).json({
+          error: "Section introuvable",
+          code: "SECTION_NOT_FOUND",
+        });
+      }
+    }
+
+    // Préparer les données de mise à jour
+    const updateData = {};
+
+    if (memberType !== undefined) {
+      const memberTypesConfig = membership.association.memberTypes || [];
+      const memberTypeExists = memberTypesConfig.find((t) => t.name === memberType);
+
+      if (!memberTypeExists) {
+        return res.status(400).json({
+          error: "Type de membre invalide",
+          code: "INVALID_MEMBER_TYPE",
+          available: memberTypesConfig.map((t) => t.name),
+        });
+      }
+
+      updateData.memberType = memberType;
+      if (cotisationAmount === undefined) {
+        updateData.cotisationAmount = memberTypeExists.cotisationAmount;
+      }
+    }
+
+    if (status !== undefined) updateData.status = status;
+    if (sectionId !== undefined) updateData.sectionId = sectionId;
+    if (cotisationAmount !== undefined) updateData.cotisationAmount = cotisationAmount;
+    if (autoPaymentEnabled !== undefined) updateData.autoPaymentEnabled = autoPaymentEnabled;
+    if (paymentMethodId !== undefined) updateData.paymentMethodId = paymentMethodId;
+
+    // Valider et mettre à jour les rôles
+    if (assignedRoles !== undefined) {
+      const rolesConfig = membership.association.rolesConfiguration?.roles || [];
+      const invalidRoles = assignedRoles.filter(
+        (roleId) => !rolesConfig.find((r) => r.id === roleId)
+      );
+
+      if (invalidRoles.length > 0) {
+        return res.status(400).json({
+          error: "Rôles invalides",
+          code: "INVALID_ROLES",
+          invalidRoles,
+          availableRoles: rolesConfig.map((r) => ({ id: r.id, name: r.name })),
+        });
+      }
+
+      // ✅ NOUVEAU : Vérifier les rôles uniques
+      const uniqueRolesToAssign = assignedRoles.filter((roleId) => {
+        const role = rolesConfig.find((r) => r.id === roleId);
+        return role?.isUnique === true;
+      });
+
+      if (uniqueRolesToAssign.length > 0) {
+        const existingMembers = await AssociationMember.findAll({
+          where: {
+            associationId,
+            status: 'active',
+            id: { [Op.ne]: memberId }, // Exclure le membre qu'on modifie
+          },
+          attributes: ['id', 'assignedRoles'],
+          include: [
+            {
+              model: User,
+              as: 'user',
+              attributes: ['firstName', 'lastName'],
+            },
+          ],
+        });
+
+        const conflicts = [];
+        
+        for (const uniqueRoleId of uniqueRolesToAssign) {
+          const conflictMember = existingMembers.find((m) =>
+            m.assignedRoles?.includes(uniqueRoleId)
+          );
+
+          if (conflictMember) {
+            const roleName = rolesConfig.find((r) => r.id === uniqueRoleId)?.name;
+            conflicts.push({
+              roleId: uniqueRoleId,
+              roleName,
+              assignedTo: `${conflictMember.user.firstName} ${conflictMember.user.lastName}`,
+              memberId: conflictMember.id,
+            });
+          }
+        }
+
+        if (conflicts.length > 0) {
+          return res.status(400).json({
+            error: "Rôle(s) unique(s) déjà attribué(s)",
+            code: "UNIQUE_ROLE_CONFLICT",
+            conflicts,
+          });
+        }
+      }
+
+      updateData.assignedRoles = assignedRoles;
+    }
+
+    // Mettre à jour le membre
+    await memberToUpdate.update(updateData);
+
+    // Charger membre mis à jour
+    const updatedMember = await AssociationMember.findByPk(memberToUpdate.id, {
+      include: [
+        {
+          model: User,
+          as: "user",
+          attributes: [
+            "id",
+            "firstName",
+            "lastName",
+            "phoneNumber",
+            "email",
+            "profilePicture",
+          ],
+        },
+        {
+          model: Section,
+          as: "section",
+          attributes: ["id", "name", "country"],
+        },
+      ],
+    });
+
+    res.json({
+      success: true,
+      message: "Membre mis à jour avec succès",
+      data: { member: updatedMember },
+    });
+  } catch (error) {
+    console.error("❌ Erreur modification membre:", error);
+    res.status(500).json({
+      error: "Erreur modification membre",
+      code: "UPDATE_MEMBER_ERROR",
+      details: error.message,
+    });
+  }
+}
+
+  // 📋 LISTER MEMBRES ASSOCIATION
+async listMembers(req, res) {
+  try {
+    const { associationId } = req.params;
+    const {
+      sectionId,
+      memberType,
+      status = "all",
+      page = 1,
+      limit = 50,
+      search,
+    } = req.query;
+
+    // ✅ Le middleware checkPermission a déjà vérifié les permissions
+    // ✅ On peut utiliser directement req.membership si besoin
+    
     // ✅ Filtrer UNIQUEMENT les membres réels (isMemberOfAssociation: true)
     const whereClause = {
       associationId,
-      isMemberOfAssociation: true, // ✅ Exclut les admins externes
+      isMemberOfAssociation: true,
     };
 
     if (sectionId) whereClause.sectionId = sectionId;
@@ -619,6 +1107,10 @@ async listMembers(req, res) {
           "lastName",
           "phoneNumber",
           "email",
+          'country',
+          'city', 
+          'address', 
+          'dateOfBirth'
         ],
         ...(search && {
           where: {
@@ -1117,106 +1609,7 @@ async listMembers(req, res) {
     }
   }
 
-  // ... (le reste des méthodes reste identique)
-
-  // Obtenir détails d'un membre
-  async getMember(req, res) {
-    try {
-      const { associationId, memberId } = req.params;
-
-      // Vérifier accès association
-      const membership = await AssociationMember.findOne({
-        where: {
-          userId: req.user.id,
-          associationId,
-          status: "active",
-        },
-        include: [
-          {
-            model: Association,
-            as: "association",
-            attributes: ["rolesConfiguration"],
-          },
-        ],
-      });
-
-      const canViewMember =
-        membership?.isAdmin ||
-        hasPermission(membership, "view_members") ||
-        req.user.id === membership?.userId ||
-        req.user.role === "super_admin";
-
-      if (!canViewMember) {
-        return res.status(403).json({
-          error: "Permission insuffisante",
-          code: "VIEW_MEMBER_DENIED",
-        });
-      }
-
-      const member = await AssociationMember.findOne({
-        where: {
-          id: memberId,
-          associationId,
-        },
-        include: [
-          {
-            model: User,
-            as: "user",
-            attributes: [
-              "id",
-              "firstName",
-              "lastName",
-              "phoneNumber",
-              "email",
-              "dateOfBirth",
-              "gender",
-              "address",
-              "city",
-              "country",
-              "postalCode",
-              "profilePicture",
-            ],
-          },
-          {
-            model: Section,
-            as: "section",
-            attributes: ["id", "name", "country", "city"],
-          },
-          {
-            model: Association,
-            as: "association",
-            attributes: ["id", "name", "rolesConfiguration"],
-          },
-        ],
-      });
-
-      if (!member) {
-        return res.status(404).json({
-          error: "Membre introuvable",
-          code: "MEMBER_NOT_FOUND",
-        });
-      }
-
-      // Calculer permissions effectives
-      const effectivePermissions = getEffectivePermissions(member);
-
-      res.json({
-        success: true,
-        data: {
-          member,
-          effectivePermissions,
-        },
-      });
-    } catch (error) {
-      console.error("❌ Erreur détails membre:", error);
-      res.status(500).json({
-        error: "Erreur détails membre",
-        code: "GET_MEMBER_ERROR",
-        details: error.message,
-      });
-    }
-  }
-
+ 
   // 🔧 CONFIGURER PRÉLÈVEMENT AUTOMATIQUE
   async setupAutoPayment(req, res) {
     try {
@@ -1630,7 +2023,7 @@ async listMembers(req, res) {
           {
             model: User,
             as: "user",
-            attributes: ["id", "firstName", "lastName", "phoneNumber", "email"],
+            attributes: ["id", "firstName", "lastName", "phoneNumber", "email", "dateOfBirth", "gender", "address", "city", "country", "postalCode", ],
           },
           {
             model: Section,
@@ -2108,657 +2501,741 @@ async listMembers(req, res) {
   }
 
   async getCotisationsDashboard(req, res) {
-    try {
-      const { associationId } = req.params;
-      const {
-        month = new Date().getMonth() + 1,
-        year = new Date().getFullYear(),
-        sectionId,
-        memberType,
-        status,
-      } = req.query;
+  try {
+    const { associationId } = req.params;
+    const {
+      month = new Date().getMonth() + 1,
+      year = new Date().getFullYear(),
+      sectionId,
+      memberType,
+      status,
+    } = req.query;
 
-      console.log("🔍 Dashboard cotisations:", {
-        associationId,
-        month,
-        year,
-        sectionId,
-      });
+    console.log("📊 Dashboard cotisations:", {
+      associationId,
+      month,
+      year,
+      sectionId,
+      memberType,
+      status,
+    });
 
-      // Vérifier permissions
-      const membership = await AssociationMember.findOne({
-        where: {
-          userId: req.user.id,
-          associationId,
-          status: "active",
+    // ✅ Permission déjà vérifiée par middleware checkPermission("finances.view_treasury")
+
+    // Récupérer l'association avec ses configurations
+    const association = await Association.findByPk(associationId, {
+      include: [
+        {
+          model: Section,
+          as: "sections",
+          attributes: ["id", "name", "country", "city"],
         },
+      ],
+    });
+
+    if (!association) {
+      return res.status(404).json({
+        error: "Association introuvable",
+        code: "ASSOCIATION_NOT_FOUND",
       });
+    }
 
-      const canViewCotisations =
-        membership?.roles?.includes("admin_association") ||
-        membership?.roles?.includes("president") ||
-        membership?.roles?.includes("tresorier") ||
-        req.user.role === "super_admin";
+    // Configuration des types de membres
+    const memberTypes = association.memberTypes || [];
 
-      if (!canViewCotisations) {
-        return res.status(403).json({
-          error: "Permission insuffisante pour voir les cotisations",
-          code: "COTISATIONS_ACCESS_DENIED",
-        });
-      }
+    // 1. Récupérer tous les membres actifs de l'association
+    const whereClause = {
+      associationId,
+      status: "active",
+      isMemberOfAssociation: true,
+    };
 
-      // Récupérer l'association avec ses configurations
-      const association = await Association.findByPk(associationId, {
-        include: [
-          {
-            model: Section,
-            as: "sections",
-            attributes: ["id", "name", "country", "city"],
-          },
-        ],
-      });
+    // Filtres optionnels
+    if (sectionId) {
+      whereClause.sectionId = parseInt(sectionId);
+    }
 
-      if (!association) {
-        return res.status(404).json({
-          error: "Association introuvable",
-          code: "ASSOCIATION_NOT_FOUND",
-        });
-      }
+    if (memberType && memberType !== "all") {
+      whereClause.memberType = memberType;
+    }
 
-      // 1. Récupérer tous les membres actifs SANS les transactions
-      const memberFilters = {
-        associationId,
-        status: "active",
-      };
+    const members = await AssociationMember.findAll({
+      where: whereClause,
+      include: [
+        {
+          model: User,
+          as: "user",
+          attributes: [
+            "id",
+            "firstName",
+            "lastName",
+            "phoneNumber",
+            "email",
+            "profilePicture",
+          ],
+        },
+        {
+          model: Section,
+          as: "section",
+          attributes: ["id", "name", "country", "city"],
+          required: false,
+        },
+      ],
+    });
 
-      if (sectionId) memberFilters.sectionId = sectionId;
-      if (memberType) memberFilters.memberType = memberType;
+    console.log(`📋 ${members.length} membres trouvés`);
 
-      const members = await AssociationMember.findAll({
-        where: memberFilters,
-        include: [
-          {
-            model: User,
-            as: "user",
-            attributes: ["id", "firstName", "lastName", "phoneNumber", "email"],
-          },
-          {
-            model: Section,
-            as: "section",
-            attributes: ["id", "name", "country", "city"],
-            required: false,
-          },
-        ],
-      });
-
-      console.log(`✅ Trouvé ${members.length} membres actifs`);
-
-      // 2. Récupérer SÉPARÉMENT les transactions pour la période
-      const transactionsFilters = {
+    // ✅ 2. Récupérer TOUTES les transactions de cotisation pour cette période
+    const transactions = await Transaction.findAll({
+      where: {
         associationId,
         type: "cotisation",
         month: parseInt(month),
         year: parseInt(year),
-      };
+        status: "completed", // ✅ SEULEMENT les cotisations validées/complétées
+      },
+    });
 
-      if (sectionId) transactionsFilters.sectionId = sectionId;
+    console.log(`💰 ${transactions.length} transactions trouvées pour ${month}/${year}`);
 
-      const transactions = await Transaction.findAll({
-        where: transactionsFilters,
-        attributes: [
-          "id",
-          "amount",
-          "status",
-          "memberId",
-          "paymentMethod",
-          "created_at",
-          "completedAt",
-        ],
-        include: [
-          {
-            model: AssociationMember,
-            as: "member",
-            attributes: ["id", "userId"],
-            include: [
-              {
-                model: User,
-                as: "user",
-                attributes: ["id", "firstName", "lastName"],
-              },
-            ],
-          },
-        ],
-      });
+    // ✅ 3. Créer un mapping memberId => montant payé
+    const paymentsByMember = {};
+    transactions.forEach((transaction) => {
+      if (!paymentsByMember[transaction.memberId]) {
+        paymentsByMember[transaction.memberId] = {
+          totalPaid: 0,
+          paymentMethod: null,
+          paymentDate: null,
+        };
+      }
+      paymentsByMember[transaction.memberId].totalPaid += parseFloat(transaction.amount);
+      paymentsByMember[transaction.memberId].paymentMethod = transaction.paymentMethod;
+      paymentsByMember[transaction.memberId].paymentDate = transaction.createdAt;
+    });
 
-      console.log(
-        `✅ Trouvé ${transactions.length} transactions pour ${month}/${year}`
+    console.log("💳 Paiements par membre:", paymentsByMember);
+
+    // ✅ 4. Calculer le statut de chaque membre
+    const membersWithStatus = members.map((member) => {
+      // Trouver la configuration du type de membre
+      const memberTypeConfig = memberTypes.find(
+        (mt) => mt.name === member.memberType
       );
 
-      // 3. Créer un Map des transactions par memberId
-      const transactionsMap = new Map();
-      transactions.forEach((transaction) => {
-        if (!transactionsMap.has(transaction.memberId)) {
-          transactionsMap.set(transaction.memberId, []);
-        }
-        transactionsMap.get(transaction.memberId).push(transaction);
-      });
+      const expectedAmount = memberTypeConfig?.cotisationAmount || 0;
 
-      // 4. Calculer les statistiques pour chaque membre
-      let totalExpected = 0;
-      let totalCollected = 0;
-      let totalPending = 0;
-      const statusCounts = {
-        paid: 0,
-        pending: 0,
-        late: 0,
-        very_late: 0,
-      };
+      // ✅ Récupérer le montant payé depuis le mapping
+      const payment = paymentsByMember[member.id] || { totalPaid: 0, paymentMethod: null, paymentDate: null };
+      const paidAmount = payment.totalPaid;
 
-      const membersWithStatus = members.map((member) => {
-        // Récupérer montant attendu selon le type de membre
-        const memberTypeConfig = association.memberTypes?.find(
-          (type) => type.name === member.memberType
+      // Statut de paiement pour cette période
+      let cotisationStatus = "pending";
+      let daysSinceDeadline = 0;
+
+      if (paidAmount >= expectedAmount) {
+        cotisationStatus = "paid";
+      } else {
+        // Calculer jours de retard
+        const deadline = new Date(year, month - 1, 10); // 10 du mois
+        const today = new Date();
+        daysSinceDeadline = Math.floor(
+          (today - deadline) / (1000 * 60 * 60 * 24)
         );
-        const expectedAmount = memberTypeConfig?.cotisationAmount || 0;
-        totalExpected += expectedAmount;
 
-        // Récupérer les transactions du membre pour cette période
-        const memberTransactions = transactionsMap.get(member.id) || [];
-
-        // Vérifier si le membre a payé ce mois
-        const completedPayment = memberTransactions.find(
-          (t) => t.status === "completed"
-        );
-        const pendingPayment = memberTransactions.find(
-          (t) => t.status === "pending"
-        ); // ✅ AJOUTER CETTE LIGNE
-
-        const paidAmount = completedPayment
-          ? parseFloat(completedPayment.amount)
-          : 0;
-
-        if (paidAmount > 0) {
-          totalCollected += paidAmount;
+        if (daysSinceDeadline > 30) {
+          cotisationStatus = "very_late";
+        } else if (daysSinceDeadline > 0) {
+          cotisationStatus = "late";
         } else {
-          totalPending += expectedAmount;
+          cotisationStatus = "pending";
         }
-
-        // Calculer le retard
-        const now = new Date();
-        const deadlineDate = new Date(year, month - 1, 5); // 5ème jour du mois
-        const daysSinceDeadline = Math.floor(
-          (now - deadlineDate) / (1000 * 60 * 60 * 24)
-        );
-
-        let cotisationStatus = "paid";
-        if (!completedPayment) {
-          if (daysSinceDeadline > 60) {
-            cotisationStatus = "very_late";
-          } else if (daysSinceDeadline > 30) {
-            cotisationStatus = "late";
-          } else {
-            cotisationStatus = "pending";
-          }
-        }
-
-        statusCounts[cotisationStatus]++;
-
-        return {
-          id: member.id,
-          userId: member.userId,
-          user: {
-            id: member.user.id,
-            firstName: member.user.firstName,
-            lastName: member.user.lastName,
-            phoneNumber: member.user.phoneNumber,
-            email: member.user.email,
-          },
-          memberType: member.memberType,
-          section: member.section
-            ? {
-                id: member.section.id,
-                name: member.section.name,
-                country: member.section.country,
-                city: member.section.city,
-              }
-            : null,
-          expectedAmount,
-          paidAmount,
-          paymentMethod: completedPayment?.paymentMethod || null,
-          cotisationStatus,
-          hasPendingValidation: !!pendingPayment, // ✅ AJOUTER CETTE LIGNE
-          paymentDate: completedPayment?.completedAt || null,
-          daysSinceDeadline: Math.max(0, daysSinceDeadline),
-          joinDate: member.joinDate,
-          roles: member.roles || [],
-        };
-      });
-
-      // 5. Filtrer par statut si demandé
-      let filteredMembers = membersWithStatus;
-      if (status && status !== "all") {
-        filteredMembers = membersWithStatus.filter(
-          (member) => member.cotisationStatus === status
-        );
       }
 
-      // 6. Calculer les KPIs
-      const collectionRate =
-        totalExpected > 0
-          ? Math.round((totalCollected / totalExpected) * 100)
-          : 0;
+      return {
+        id: member.id,
+        userId: member.userId,
+        user: member.user,
+        memberType: member.memberType,
+        section: member.section,
+        expectedAmount,
+        paidAmount,
+        hasPendingValidation: 0, // TODO: calculer si cotisations en validation
+        paymentMethod: payment.paymentMethod,
+        cotisationStatus,
+        paymentDate: payment.paymentDate,
+        daysSinceDeadline,
+        assignedRoles: member.assignedRoles || [],
+        isAdmin: member.isAdmin || false,
+      };
+    });
 
-      // 7. Statistiques par section
-      const sectionStats =
-        association.sections?.map((section) => {
-          const sectionMembers = membersWithStatus.filter(
-            (m) => m.section?.id === section.id
-          );
-          const sectionExpected = sectionMembers.reduce(
-            (sum, m) => sum + m.expectedAmount,
-            0
-          );
-          const sectionCollected = sectionMembers.reduce(
-            (sum, m) => sum + m.paidAmount,
-            0
-          );
+    // 5. Filtrer par statut si demandé
+    let filteredMembers = membersWithStatus;
+    if (status && status !== "all") {
+      filteredMembers = membersWithStatus.filter(
+        (m) => m.cotisationStatus === status
+      );
+    }
 
-          return {
-            section: {
-              id: section.id,
-              name: section.name,
-              country: section.country,
-              city: section.city,
+    console.log(`📊 ${filteredMembers.length} membres après filtrage statut`);
+
+    // 6. Calculer KPIs globaux
+    const totalExpected = membersWithStatus.reduce(
+      (sum, m) => sum + m.expectedAmount,
+      0
+    );
+    const totalCollected = membersWithStatus.reduce(
+      (sum, m) => sum + m.paidAmount,
+      0
+    );
+    const totalPending = totalExpected - totalCollected;
+    const collectionRate =
+      totalExpected > 0
+        ? Math.round((totalCollected / totalExpected) * 100)
+        : 0;
+
+    // Compter par statut
+    const statusCounts = {
+      paid: membersWithStatus.filter((m) => m.cotisationStatus === "paid")
+        .length,
+      pending: membersWithStatus.filter((m) => m.cotisationStatus === "pending")
+        .length,
+      late: membersWithStatus.filter((m) => m.cotisationStatus === "late")
+        .length,
+      very_late: membersWithStatus.filter(
+        (m) => m.cotisationStatus === "very_late"
+      ).length,
+    };
+
+    // 7. Statistiques par section
+    const sectionStats = [];
+
+    if (association.isMultiSection) {
+      // Grouper par section
+      const bySection = {};
+
+      membersWithStatus.forEach((member) => {
+        const sectionId = member.section?.id || null;
+        const sectionKey = sectionId || "central";
+
+        if (!bySection[sectionKey]) {
+          bySection[sectionKey] = {
+            section: member.section || {
+              id: null,
+              name: "Central",
+              country: null,
+              city: null,
             },
-            membersCount: sectionMembers.length,
-            expectedAmount: sectionExpected,
-            collectedAmount: sectionCollected,
-            collectionRate:
-              sectionExpected > 0
-                ? Math.round((sectionCollected / sectionExpected) * 100)
-                : 0,
+            members: [],
           };
-        }) || [];
+        }
 
-      // Ajouter les membres sans section (association centrale)
-      const centralMembers = membersWithStatus.filter((m) => !m.section);
-      if (centralMembers.length > 0) {
-        const centralExpected = centralMembers.reduce(
+        bySection[sectionKey].members.push(member);
+      });
+
+      // Calculer stats pour chaque section
+      Object.values(bySection).forEach((sectionGroup) => {
+        const sectionExpected = sectionGroup.members.reduce(
           (sum, m) => sum + m.expectedAmount,
           0
         );
-        const centralCollected = centralMembers.reduce(
+        const sectionCollected = sectionGroup.members.reduce(
           (sum, m) => sum + m.paidAmount,
           0
         );
 
-        sectionStats.unshift({
-          section: {
-            id: null,
-            name: "Association Centrale",
-            country: null,
-            city: null,
-          },
-          membersCount: centralMembers.length,
-          expectedAmount: centralExpected,
-          collectedAmount: centralCollected,
+        sectionStats.push({
+          section: sectionGroup.section,
+          membersCount: sectionGroup.members.length,
+          expectedAmount: sectionExpected,
+          collectedAmount: sectionCollected,
           collectionRate:
-            centralExpected > 0
-              ? Math.round((centralCollected / centralExpected) * 100)
+            sectionExpected > 0
+              ? Math.round((sectionCollected / sectionExpected) * 100)
               : 0,
         });
-      }
-
-      // 8. Statistiques par type de membre
-      const memberTypeStats = Object.entries(
-        membersWithStatus.reduce((acc, member) => {
-          if (!acc[member.memberType]) {
-            acc[member.memberType] = {
-              count: 0,
-              expected: 0,
-              collected: 0,
-            };
-          }
-          acc[member.memberType].count++;
-          acc[member.memberType].expected += member.expectedAmount;
-          acc[member.memberType].collected += member.paidAmount;
-          return acc;
-        }, {})
-      ).map(([type, stats]) => ({
-        memberType: type,
-        membersCount: stats.count,
-        expectedAmount: stats.expected,
-        collectedAmount: stats.collected,
-        collectionRate:
-          stats.expected > 0
-            ? Math.round((stats.collected / stats.expected) * 100)
-            : 0,
-      }));
-
-      console.log("📊 KPIs calculés:", {
-        totalExpected,
-        totalCollected,
-        collectionRate,
-        statusCounts,
       });
+    } else {
+      // Association sans sections - stats centralisées
+      const centralExpected = membersWithStatus.reduce(
+        (sum, m) => sum + m.expectedAmount,
+        0
+      );
+      const centralCollected = membersWithStatus.reduce(
+        (sum, m) => sum + m.paidAmount,
+        0
+      );
 
-      res.json({
-        success: true,
-        data: {
-          period: {
-            month: parseInt(month),
-            year: parseInt(year),
-            monthName: new Date(year, month - 1).toLocaleDateString("fr-FR", {
-              month: "long",
-            }),
-          },
-          kpis: {
-            totalExpected,
-            totalCollected,
-            totalPending,
-            collectionRate,
-            membersCount: membersWithStatus.length,
-            ...statusCounts,
-          },
-          members: filteredMembers,
-          statistics: {
-            bySections: sectionStats,
-            byMemberTypes: memberTypeStats,
-          },
-          filters: {
-            month: parseInt(month),
-            year: parseInt(year),
-            sectionId: sectionId || null,
-            memberType: memberType || null,
-            status: status || "all",
-          },
+      sectionStats.push({
+        section: {
+          id: null,
+          name: "Central",
+          country: null,
+          city: null,
         },
-      });
-    } catch (error) {
-      console.error("❌ Erreur dashboard cotisations:", error);
-      res.status(500).json({
-        error: "Erreur récupération dashboard cotisations",
-        code: "COTISATIONS_DASHBOARD_ERROR",
-        details: error.message,
+        membersCount: membersWithStatus.length,
+        expectedAmount: centralExpected,
+        collectedAmount: centralCollected,
+        collectionRate:
+          centralExpected > 0
+            ? Math.round((centralCollected / centralExpected) * 100)
+            : 0,
       });
     }
-  }
 
-  async addManualCotisation(req, res) {
-    try {
-      const { associationId } = req.params;
-      const { memberId, amount, month, year, reason, paymentMethod } = req.body;
-
-      // Vérifier permissions (président, secrétaire, trésorier peuvent ajouter)
-      const requestorMembership = await AssociationMember.findOne({
-        where: {
-          userId: req.user.id,
-          associationId,
-          status: "active",
-        },
-      });
-
-      const canAddCotisation =
-        requestorMembership?.roles?.includes("admin_association") ||
-        requestorMembership?.roles?.includes("president") ||
-        requestorMembership?.roles?.includes("secretaire") ||
-        requestorMembership?.roles?.includes("tresorier") ||
-        req.user.role === "super_admin";
-
-      if (!canAddCotisation) {
-        return res.status(403).json({
-          error: "Permission insuffisante pour ajouter une cotisation",
-          code: "ADD_COTISATION_DENIED",
-        });
-      }
-
-      // Récupérer le membre cible avec ses infos
-      const targetMember = await AssociationMember.findOne({
-        where: {
-          id: memberId,
-          associationId,
-          status: "active",
-        },
-        include: [
-          {
-            model: User,
-            as: "user",
-            attributes: ["id", "firstName", "lastName", "phoneNumber"],
-          },
-          {
-            model: Section,
-            as: "section",
-            attributes: ["id", "name"],
-          },
-        ],
-      });
-
-      if (!targetMember) {
-        return res.status(404).json({
-          error: "Membre introuvable",
-          code: "MEMBER_NOT_FOUND",
-        });
-      }
-
-      // Récupérer l'association pour connaître sa structure
-      const association = await Association.findByPk(associationId);
-      if (!association) {
-        return res.status(404).json({
-          error: "Association introuvable",
-          code: "ASSOCIATION_NOT_FOUND",
-        });
-      }
-
-      // Vérifier qu'une cotisation n'existe pas déjà pour cette période
-      const existingCotisation = await Transaction.findOne({
-        where: {
-          associationId,
-          memberId: targetMember.id,
-          type: "cotisation",
-          month: parseInt(month),
-          year: parseInt(year),
-          status: ["completed", "pending", "processing"],
-        },
-      });
-
-      if (existingCotisation) {
-        return res.status(400).json({
-          error: `Une cotisation existe déjà pour ${month}/${year}`,
-          code: "COTISATION_ALREADY_EXISTS",
-        });
-      }
-
-      // Déterminer le statut initial et qui doit valider
-      let initialStatus = "pending";
-      let validatorInfo = null;
-      let requiresApproval = true;
-
-      // Auto-validation si c'est le trésorier qui ajoute
-      const isRequestorTreasurer =
-        requestorMembership?.roles?.includes("tresorier");
-
-      if (isRequestorTreasurer) {
-        initialStatus = "completed";
-        requiresApproval = false;
-        validatorInfo = {
-          approvedBy: req.user.id,
-          approvedAt: new Date(),
-          validatorRole: "tresorier",
-        };
-      } else {
-        // Déterminer qui peut valider selon la structure
-        if (association.isMultiSection && targetMember.sectionId) {
-          // Association multi-sections : trésorier de section OU bureau central
-          const sectionTreasurers = await AssociationMember.findAll({
-            where: {
-              associationId,
-              sectionId: targetMember.sectionId,
-              status: "active",
-              [Op.and]: [
-                sequelize.literal(
-                  `roles::jsonb @> '["tresorier_section"]'::jsonb`
-                ),
-              ],
-            },
-            include: [
-              {
-                model: User,
-                as: "user",
-                attributes: ["firstName", "lastName"],
-              },
-            ],
-          });
-
-          const centralTreasurers = await AssociationMember.findAll({
-            where: {
-              associationId,
-              status: "active",
-              [Op.and]: [
-                sequelize.literal(`roles::jsonb @> '["tresorier"]'::jsonb`),
-              ],
-            },
-            include: [
-              {
-                model: User,
-                as: "user",
-                attributes: ["firstName", "lastName"],
-              },
-            ],
-          });
-
-          validatorInfo = {
-            sectionValidators: sectionTreasurers,
-            centralValidators: centralTreasurers,
-          };
-        } else {
-          // Association simple : trésorier central uniquement
-          const treasurers = await AssociationMember.findAll({
-            where: {
-              associationId,
-              status: "active",
-              [Op.and]: [
-                sequelize.literal(`roles::jsonb @> '["tresorier"]'::jsonb`),
-              ],
-            },
-            include: [
-              {
-                model: User,
-                as: "user",
-                attributes: ["firstName", "lastName"],
-              },
-            ],
-          });
-
-          validatorInfo = {
-            validators: treasurers,
+    // 8. Statistiques par type de membre
+    const memberTypeStats = Object.entries(
+      membersWithStatus.reduce((acc, member) => {
+        if (!acc[member.memberType]) {
+          acc[member.memberType] = {
+            count: 0,
+            expected: 0,
+            collected: 0,
           };
         }
-      }
+        acc[member.memberType].count++;
+        acc[member.memberType].expected += member.expectedAmount;
+        acc[member.memberType].collected += member.paidAmount;
+        return acc;
+      }, {})
+    ).map(([type, stats]) => ({
+      memberType: type,
+      membersCount: stats.count,
+      expectedAmount: stats.expected,
+      collectedAmount: stats.collected,
+      collectionRate:
+        stats.expected > 0
+          ? Math.round((stats.collected / stats.expected) * 100)
+          : 0,
+    }));
 
-      // ✅ LOGIQUE COMMISSION CORRIGÉE
-      // Commission UNIQUEMENT pour les paiements par carte (frais PSP)
-      let commissionAmount = 0;
-      let netAmount = parseFloat(amount);
+    console.log("📊 KPIs calculés:", {
+      totalExpected,
+      totalCollected,
+      collectionRate,
+      statusCounts,
+    });
 
-      if (paymentMethod === "card") {
-        commissionAmount = parseFloat((amount * 0.025 + 0.25).toFixed(2));
-        netAmount = parseFloat((amount - commissionAmount).toFixed(2));
-      }
-      // Pour cash, check, bank_transfer : pas de commission
+    res.json({
+      success: true,
+      data: {
+        period: {
+          month: parseInt(month),
+          year: parseInt(year),
+          monthName: new Date(year, month - 1).toLocaleDateString("fr-FR", {
+            month: "long",
+          }),
+        },
+        kpis: {
+          totalExpected,
+          totalCollected,
+          totalPending,
+          collectionRate,
+          membersCount: membersWithStatus.length,
+          ...statusCounts,
+        },
+        members: filteredMembers,
+        statistics: {
+          bySections: sectionStats,
+          byMemberTypes: memberTypeStats,
+        },
+        filters: {
+          month: parseInt(month),
+          year: parseInt(year),
+          sectionId: sectionId ? parseInt(sectionId) : null,
+          memberType: memberType || null,
+          status: status || "all",
+        },
+      },
+    });
+  } catch (error) {
+    console.error("❌ Erreur dashboard cotisations:", error);
+    res.status(500).json({
+      error: "Erreur récupération dashboard cotisations",
+      code: "COTISATIONS_DASHBOARD_ERROR",
+      details: error.message,
+    });
+  }
+}
 
-      console.log("💰 Commission calculée:", {
-        paymentMethod,
-        amount: parseFloat(amount),
-        commissionAmount,
-        netAmount,
+  async addManualCotisation(req, res) {
+  console.log("🎯 addManualCotisation appelé !");
+  console.log("📦 Body reçu:", req.body);
+  console.log("👤 User:", req.user?.id);
+  console.log("🏢 Membership:", req.membership);
+  
+  try {
+    const { associationId } = req.params;
+    const { memberId, amount, month, year, reason, paymentMethod } = req.body;
+
+    // ✅ Validation des données d'entrée
+    if (!memberId || !amount || !month || !year || !paymentMethod) {
+      return res.status(400).json({
+        error: "Données manquantes",
+        code: "MISSING_FIELDS",
+        details: {
+          memberId: !!memberId,
+          amount: !!amount,
+          month: !!month,
+          year: !!year,
+          paymentMethod: !!paymentMethod
+        }
       });
+    }
 
-      // Créer la transaction
-      const transaction = await Transaction.create({
-        userId: targetMember.userId,
+    // ✅ Le middleware checkPermission a déjà vérifié les permissions
+    // ✅ req.membership est fourni par checkAssociationMember
+
+    // Récupérer le membre cible avec ses infos
+    const targetMember = await AssociationMember.findOne({
+      where: {
+        id: memberId,
         associationId,
-        sectionId: targetMember.sectionId,
+        status: "active",
+      },
+      include: [
+        {
+          model: User,
+          as: "user",
+          attributes: ["id", "firstName", "lastName", "phoneNumber"],
+        },
+        {
+          model: Section,
+          as: "section",
+          attributes: ["id", "name"],
+        },
+      ],
+    });
+
+    if (!targetMember) {
+      return res.status(404).json({
+        error: "Membre introuvable",
+        code: "MEMBER_NOT_FOUND",
+      });
+    }
+
+    // Récupérer l'association pour connaître sa structure
+    const association = await Association.findByPk(associationId);
+    if (!association) {
+      return res.status(404).json({
+        error: "Association introuvable",
+        code: "ASSOCIATION_NOT_FOUND",
+      });
+    }
+
+    // Vérifier qu'une cotisation n'existe pas déjà pour cette période
+    const existingCotisation = await Transaction.findOne({
+      where: {
+        associationId,
         memberId: targetMember.id,
         type: "cotisation",
-        amount: parseFloat(amount),
-        commissionAmount,
-        netAmount,
-        currency: "EUR",
         month: parseInt(month),
         year: parseInt(year),
-        paymentMethod,
-        status: initialStatus,
-        description: reason,
-        source: "manual",
-        addedBy: req.user.id,
-        addedByRole: requestorMembership?.roles?.[0] || "member",
-        ...(validatorInfo?.approvedBy && {
-          approvedBy: validatorInfo.approvedBy,
-          approvedAt: validatorInfo.approvedAt,
-          completedAt: validatorInfo.approvedAt,
-          processedAt: validatorInfo.approvedAt,
-        }),
+        status: ["completed", "pending", "processing"],
+      },
+    });
+
+    if (existingCotisation) {
+      return res.status(400).json({
+        error: `Une cotisation existe déjà pour ${month}/${year}`,
+        code: "COTISATION_ALREADY_EXISTS",
       });
+    }
 
-      // Si validé directement, mettre à jour les stats du membre
-      if (initialStatus === "completed") {
-        await targetMember.update({
-          totalContributed:
-            parseFloat(targetMember.totalContributed || "0") +
-            parseFloat(amount),
-          lastContributionDate: new Date(),
-          contributionStatus: "uptodate",
-        });
-      }
+    // ✅ NOUVELLE LOGIQUE : Auto-validation si l'utilisateur a finances.manage_budgets
+    // Le middleware checkPermission a déjà vérifié que l'utilisateur a cette permission
+    // Donc SI on arrive ici, c'est que l'utilisateur PEUT gérer les budgets
+    // Donc on valide automatiquement la cotisation
+    
+    const initialStatus = "completed";
+    const requiresApproval = false;
+    const validatorInfo = {
+      approvedBy: req.user.id,
+      approvedAt: new Date(),
+      validatorRole: "financial_manager", // Celui qui a finances.manage_budgets
+    };
 
-      // Préparer les notifications (à implémenter)
-      let notificationMessage = "";
-      if (initialStatus === "completed") {
-        notificationMessage = `Cotisation de ${amount}€ ajoutée et validée pour ${targetMember.user.firstName} ${targetMember.user.lastName}`;
-      } else {
-        notificationMessage = `Nouvelle cotisation en attente de validation : ${amount}€ pour ${targetMember.user.firstName} ${targetMember.user.lastName}`;
-      }
+    console.log("✅ Auto-validation activée (permission finances.manage_budgets détectée)");
 
-      res.json({
-        success: true,
-        message:
-          initialStatus === "completed"
-            ? "Cotisation ajoutée et validée avec succès"
-            : "Cotisation ajoutée - en attente de validation",
-        data: {
-          transaction: {
-            id: transaction.id,
-            amount: parseFloat(amount),
-            commissionAmount,
-            netAmount,
-            month: parseInt(month),
-            year: parseInt(year),
-            status: initialStatus,
-            paymentMethod,
-            reason,
-          },
-          member: {
-            id: targetMember.id,
-            name: `${targetMember.user.firstName} ${targetMember.user.lastName}`,
-            section: targetMember.section?.name,
-          },
-          validation: {
-            required: requiresApproval,
-            autoValidated: initialStatus === "completed",
-            validators: validatorInfo,
-          },
-          notification: notificationMessage,
+    // ✅ LOGIQUE COMMISSION
+    // Commission UNIQUEMENT pour les paiements par carte (frais PSP)
+    let commissionAmount = 0;
+    let netAmount = parseFloat(amount);
+
+    if (paymentMethod === "card") {
+      commissionAmount = parseFloat((amount * 0.025 + 0.25).toFixed(2));
+      netAmount = parseFloat((amount - commissionAmount).toFixed(2));
+    }
+    // Pour cash, check, bank_transfer, mobile_money : pas de commission
+
+    console.log("💰 Commission calculée:", {
+      paymentMethod,
+      amount: parseFloat(amount),
+      commissionAmount,
+      netAmount,
+    });
+
+    // Créer la transaction
+    const transaction = await Transaction.create({
+      userId: targetMember.userId,
+      associationId,
+      sectionId: targetMember.sectionId,
+      memberId: targetMember.id,
+      type: "cotisation",
+      amount: parseFloat(amount),
+      commissionAmount,
+      netAmount,
+      currency: association.primaryCurrency || "EUR",
+      month: parseInt(month),
+      year: parseInt(year),
+      paymentMethod,
+      status: initialStatus,
+      description: reason || null,
+      source: "manual",
+      addedBy: req.user.id,
+      addedByRole: req.membership?.assignedRoles?.[0] || "member",
+      approvedBy: validatorInfo.approvedBy,
+      approvedAt: validatorInfo.approvedAt,
+      completedAt: validatorInfo.approvedAt,
+      processedAt: validatorInfo.approvedAt,
+    });
+
+    // Mettre à jour les stats du membre (toujours validé directement)
+    await targetMember.update({
+      totalContributed:
+        parseFloat(targetMember.totalContributed || "0") +
+        parseFloat(amount),
+      lastContributionDate: new Date(),
+      contributionStatus: "uptodate",
+    });
+
+    // Message de notification
+    const currencySymbol = association.primaryCurrency || "EUR";
+    const notificationMessage = `Cotisation de ${amount} ${currencySymbol} ajoutée et validée pour ${targetMember.user.firstName} ${targetMember.user.lastName}`;
+
+    console.log("✅ Cotisation créée avec succès:", {
+      transactionId: transaction.id,
+      status: initialStatus,
+      amount: parseFloat(amount),
+    });
+
+    res.json({
+      success: true,
+      message: "Cotisation ajoutée et validée avec succès",
+      data: {
+        transaction: {
+          id: transaction.id,
+          amount: parseFloat(amount),
+          commissionAmount,
+          netAmount,
+          month: parseInt(month),
+          year: parseInt(year),
+          status: initialStatus,
+          paymentMethod,
+          reason: reason || null,
         },
+        member: {
+          id: targetMember.id,
+          name: `${targetMember.user.firstName} ${targetMember.user.lastName}`,
+          section: targetMember.section?.name,
+        },
+        validation: {
+          required: requiresApproval,
+          autoValidated: true,
+          validatorInfo,
+        },
+        notification: notificationMessage,
+      },
+    });
+  } catch (error) {
+    console.error("❌ Erreur ajout cotisation manuelle:", error);
+    res.status(500).json({
+      error: "Erreur ajout cotisation manuelle",
+      code: "MANUAL_COTISATION_ERROR",
+      details: error.message,
+    });
+  }
+}
+
+   // 📄 EXPORTER MEMBRES EN PDF
+async exportMembersPDF(req, res) {
+  try {
+    const { associationId } = req.params;
+    const {
+      sectionId,
+      memberType,
+      status = "all",
+      search,
+    } = req.query;
+
+    console.log("📄 Export PDF membres:", {
+      associationId,
+      filters: { sectionId, memberType, status, search },
+    });
+
+    // ✅ Le middleware a déjà vérifié la permission membres.export_data
+
+    // Récupérer l'association avec son logo
+    const association = await Association.findByPk(associationId);
+    if (!association) {
+      return res.status(404).json({
+        error: "Association introuvable",
+        code: "ASSOCIATION_NOT_FOUND",
       });
-    } catch (error) {
-      console.error("Erreur ajout cotisation manuelle:", error);
+    }
+
+    // Construire les filtres (même logique que listMembers)
+    const whereClause = {
+      associationId,
+      isMemberOfAssociation: true,
+    };
+
+    if (sectionId) whereClause.sectionId = sectionId;
+    if (status !== "all") whereClause.status = status;
+    if (memberType) whereClause.memberType = memberType;
+
+    const includes = [
+      {
+        model: User,
+        as: "user",
+        attributes: [
+          "id",
+          "firstName",
+          "lastName",
+          "phoneNumber",
+          "email",
+        ],
+        ...(search && {
+          where: {
+            [Op.or]: [
+              { firstName: { [Op.iLike]: `%${search}%` } },
+              { lastName: { [Op.iLike]: `%${search}%` } },
+              { phoneNumber: { [Op.iLike]: `%${search}%` } },
+            ],
+          },
+        }),
+      },
+      {
+        model: Section,
+        as: "section",
+        attributes: ["id", "name", "city"],
+        required: false,
+      },
+    ];
+
+    // Récupérer TOUS les membres (pas de pagination pour l'export)
+    const members = await AssociationMember.findAll({
+      where: whereClause,
+      include: includes,
+      order: [["joinDate", "DESC"]],
+    });
+
+    console.log(`✅ ${members.length} membres à exporter`);
+
+    // Récupérer la configuration des rôles pour afficher les noms
+    const rolesConfig = association.rolesConfiguration?.roles || [];
+
+    if (members.length === 0) {
+      return res.status(404).json({
+        error: "Aucun membre à exporter avec ces filtres",
+        code: "NO_MEMBERS_TO_EXPORT",
+      });
+    }
+
+    // ✅ CORRECTION : Appel de la fonction helper AVANT de pipe vers res
+    if (members.length <= 300) {
+      // ✅ CAS 1 : PDF UNIQUE (≤ 300 membres)
+      const PDFDocument = require("pdfkit");
+      const doc = new PDFDocument({ 
+  margin: 30,
+  size: 'A4',
+  layout: 'landscape' // ✅ Mode paysage
+});
+
+      // Headers pour le téléchargement
+      const fileName = `Membres_${association.name.replace(/[^a-z0-9]/gi, "_")}_${new Date().toISOString().split("T")[0]}.pdf`;
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${fileName}"`
+      );
+
+      // ✅ CRITIQUE : pipe APRÈS avoir généré le contenu
+      doc.pipe(res);
+
+      // ✅ Générer le PDF (fonction synchrone)
+      generateMembersPDF(doc, association, members, rolesConfig, {
+        sectionId,
+        memberType,
+        status,
+        search,
+      });
+
+      doc.end();
+    } else {
+      // ✅ CAS 2 : ZIP AVEC PLUSIEURS PDFs (> 300 membres)
+      const archiver = require("archiver");
+      const PDFDocument = require("pdfkit");
+
+      const zipName = `Membres_${association.name.replace(/[^a-z0-9]/gi, "_")}_${new Date().toISOString().split("T")[0]}.zip`;
+      res.setHeader("Content-Type", "application/zip");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${zipName}"`
+      );
+
+      const archive = archiver("zip", { zlib: { level: 9 } });
+      archive.pipe(res);
+
+      // Diviser en groupes de 100 membres
+      const chunkSize = 100;
+      const chunks = [];
+      for (let i = 0; i < members.length; i += chunkSize) {
+        chunks.push(members.slice(i, i + chunkSize));
+      }
+
+      console.log(`📦 Création ZIP avec ${chunks.length} fichiers PDF`);
+
+      // Générer chaque PDF
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        const doc = new PDFDocument({ margin: 50 });
+        const pdfFileName = `Membres_Part${i + 1}_sur_${chunks.length}.pdf`;
+
+        // Ajouter le PDF au ZIP
+        archive.append(doc, { name: pdfFileName });
+
+        // ✅ Générer le contenu du PDF
+        generateMembersPDF(doc, association, chunk, rolesConfig, {
+          sectionId,
+          memberType,
+          status,
+          search,
+          partNumber: i + 1,
+          totalParts: chunks.length,
+        });
+
+        doc.end();
+      }
+
+      await archive.finalize();
+    }
+  } catch (error) {
+    console.error("❌ Erreur export PDF membres:", error);
+    
+    // ✅ NE PAS envoyer de réponse si les headers sont déjà envoyés
+    if (!res.headersSent) {
       res.status(500).json({
-        error: "Erreur ajout cotisation manuelle",
-        code: "MANUAL_COTISATION_ERROR",
+        error: "Erreur export PDF membres",
+        code: "EXPORT_PDF_ERROR",
         details: error.message,
       });
     }
   }
+}
+
+
+
 }
 
 module.exports = new MemberController();
